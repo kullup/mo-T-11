@@ -12,7 +12,7 @@ public:
         setUsingNativeTitleBar(true);
         setContentOwned(new mot::Panel(audio), true);
         setResizable(true, false);
-        setResizeLimits(1080, 513, 2400, 1440);
+        setResizeLimits(1080, 1080 * mot::Panel::designHeight / mot::Panel::designWidth, 2400, 1440);
         if (auto* constrainer = getConstrainer())
             constrainer->setFixedAspectRatio(static_cast<double>(mot::Panel::designWidth) / mot::Panel::designHeight);
         grip = std::make_unique<juce::ResizableCornerComponent>(this, getConstrainer());

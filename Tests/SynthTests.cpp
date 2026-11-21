@@ -38,6 +38,29 @@ float peak(const std::vector<float>& values)
     return max;
 }
 
+float pitch(const std::vector<float>& values, int begin, int end)
+{
+    float first = 0.0f, last = 0.0f;
+    int crossings = 0;
+    for (int i = begin + 1; i < end; ++i)
+        if (values[i - 1] < 0.0f && values[i] >= 0.0f)
+        {
+            last = i - values[i] / (values[i] - values[i - 1]);
+            if (crossings++ == 0)
+                first = last;
+        }
+    check(crossings >= 2, "Not enough cycles to measure pitch");
+    return (crossings - 1) * 48000.0f / (last - first);
+}
+
+Patch sinePatch()
+{
+    Patch p;
+    p.osc[0].position = 0.0f;
+    p.ampEnv = { 0.06f, 0.02f, 1.0f, 0.02f };
+    return p;
+}
+
 void notes(const WaveBank& bank)
 {
     Synth synth(bank);
@@ -116,6 +139,107 @@ void modulationAndPolyphony(const WaveBank& bank)
     }
 }
 
+void monoPlaying(const WaveBank& bank)
+{
+    const Event low { EventType::noteOn, 1, 1, 57 };
+    const Event high { EventType::noteOn, 2, 16, 69 };
+    const Event releaseHigh { EventType::noteOff, 2, 16, 69 };
+    auto p = sinePatch();
+    Synth synth(bank);
+    p.voicing.mode = PlayMode::mono;
+    synth.setPatch(p);
+    Block(synth, 4800, { low });
+    const Block retriggered(synth, 960, { high });
+    check(synth.activeVoices() == 1, "Mono sounded multiple MIDI notes");
+    const Block fallback(synth, 4800, { releaseHigh });
+    check(std::abs(pitch(fallback.left, 3600, 4800) - 220.0f) < 1.0f, "Mono did not return to the lower held note");
+
+    synth.prepare(48000);
+    p.voicing.mode = PlayMode::legato;
+    synth.setPatch(p);
+    Block(synth, 4800, { low });
+    const Block legato(synth, 960, { high });
+    check(peak(legato.left) > peak(retriggered.left) * 2.5f, "Legato restarted the amp envelope");
+    const Block resumed(synth, 960, { releaseHigh });
+    check(peak(resumed.left) > peak(retriggered.left) * 2.5f, "Legato fallback restarted the amp envelope");
+
+    Event pedal { EventType::expression, 1, 1 };
+    pedal.controls.sustain = true;
+    Block(synth, 4800, { pedal, { EventType::noteOff, 1, 1, 57 } });
+    check(synth.activeVoices() == 1, "Sustain did not hold the mono gate");
+    pedal.controls.sustain = false;
+    Block(synth, 4800, { pedal });
+    check(synth.activeVoices() == 0, "Pedal-up left the mono gate active");
+
+    Block(synth, 4800, { low, high, { EventType::disconnect, 2 } });
+    check(synth.activeVoices() == 1, "Disconnect did not fall back to another MIDI port");
+    Block(synth, 4800, { { EventType::allSoundOff, 1, 1 } });
+    check(synth.activeVoices() == 0, "All Sound Off left a mono note active");
+    Block(synth, 4800, { low, high, { EventType::panic }, releaseHigh });
+    check(synth.activeVoices() == 0, "Panic left a note in the mono stack");
+
+    p.voicing.mode = PlayMode::poly;
+    synth.setPatch(p);
+    Block(synth, 4800, { low, high });
+    p.voicing.mode = PlayMode::legato;
+    synth.setPatch(p);
+    const Block collapsed(synth, 2400);
+    check(synth.activeVoices() == 1 && std::abs(pitch(collapsed.left, 1000, 2400) - 440.0f) < 1.0f,
+          "Switching to mono lost the most recently held note");
+    p.voicing.mode = PlayMode::poly;
+    synth.setPatch(p);
+    check(synth.activeVoices() == 2, "Switching back to poly lost a held note");
+}
+
+void glideAndUnison(const WaveBank& bank)
+{
+    const Event low { EventType::noteOn, 1, 1, 57 };
+    const Event high { EventType::noteOn, 1, 1, 69 };
+    auto p = sinePatch();
+    p.ampEnv.attack = 0.002f;
+    p.voicing.mode = PlayMode::legato;
+    p.voicing.glide = 0.2f;
+    Synth synth(bank);
+    synth.setPatch(p);
+    Block(synth, 4800, { low });
+    const Block sliding(synth, 11000, { high });
+    check(std::abs(pitch(sliding.left, 0, 960) - 228.0f) < 6.0f, "Glide did not start near the previous pitch");
+    check(std::abs(pitch(sliding.left, 4400, 5200) - 311.0f) < 6.0f, "Glide did not interpolate in semitones");
+    check(std::abs(pitch(sliding.left, 9700, 11000) - 440.0f) < 1.0f, "Glide missed its target or duration");
+    const Block slidingBack(synth, 11000, { { EventType::noteOff, 1, 1, 69 } });
+    check(std::abs(pitch(slidingBack.left, 0, 960) - 425.0f) < 8.0f
+          && std::abs(pitch(slidingBack.left, 9700, 11000) - 220.0f) < 1.0f,
+          "Glide did not return smoothly to the held note");
+    const Block released(synth, 2200, { { EventType::allNotesOff, 1, 1 } });
+    check(synth.activeVoices() == 0 && peak(released.left) > 0.01f, "All Notes Off did not release the mono note");
+    const Block detached(synth, 960, { high });
+    check(std::abs(pitch(detached.left, 120, 960) - 440.0f) < 1.0f, "Glide leaked across a gap between notes");
+
+    p.voicing = { PlayMode::poly, 0.0f, 2, 50.0f, 0.0f };
+    synth.prepare(48000);
+    synth.setPatch(p);
+    const Block centred(synth, 4800, { high });
+    check(std::equal(centred.left.begin(), centred.left.end(), centred.right.begin(),
+                     [](float left, float right) { return std::abs(left - right) < 1.0e-6f; })
+          && peak(centred.left) > 0.03f, "Zero-width unison was not centred");
+    p.voicing.width = 1.0f;
+    synth.setPatch(p);
+    const Block wide(synth, 7200);
+    check(std::abs(pitch(wide.left, 4800, 7200) - 427.47f) < 1.0f
+          && std::abs(pitch(wide.right, 4800, 7200) - 452.89f) < 1.0f,
+          "Stereo unison did not pan and detune its layers independently");
+    p.voicing.unison = maxUnison;
+    synth.setPatch(p);
+    std::array<Event, Synth::polyphony - 1> chord {};
+    for (std::size_t i = 0; i < chord.size(); ++i)
+        chord[i].note = 42 + static_cast<int>(i);
+    std::array<float, 4096> left {}, right {};
+    synth.render(left.data(), right.data(), static_cast<int>(left.size()), chord.data(), chord.size());
+    check(synth.activeVoices() == Synth::polyphony, "Unison reduced note polyphony");
+    check(peak({ left.begin(), left.end() }) < 1.0f && peak({ right.begin(), right.end() }) < 1.0f,
+          "Unison chord exceeded full scale");
+}
+
 void patches()
 {
     for (const auto& preset : factoryPresets())
@@ -126,12 +250,23 @@ void patches()
     }
     NamedPatch custom { "Custom \"01\"", factoryPresets()[2].sound };
     custom.sound.matrix[7][6] = -0.987f;
+    custom.sound.voicing = { PlayMode::legato, 0.123f, 4, 35.0f, 0.83f };
     const auto encoded = encodePatch(custom);
     const auto decoded = decodePatch(encoded);
     check(decoded && encodePatch(*decoded) == encoded, "Custom patch failed round-trip");
     check(!decodePatch(encoded.substr(0, encoded.size() / 2)), "Truncated patch was accepted");
-    check(!decodePatch("MOT11 2" + encoded.substr(7)), "Unknown patch version was accepted");
+    check(!decodePatch("MOT11 3" + encoded.substr(7)), "Unknown patch version was accepted");
     check(!decodePatch(encoded + "junk"), "Unexpected trailing content was accepted");
+    const auto voicing = encoded.find("VOICING ");
+    const auto matrix = encoded.find("MATRIX\n", voicing);
+    const auto legacy = decodePatch("MOT11 1" + encoded.substr(7, voicing - 7) + encoded.substr(matrix));
+    const Voicing defaults;
+    check(legacy && legacy->sound.voicing.mode == defaults.mode && legacy->sound.voicing.glide == defaults.glide
+          && legacy->sound.voicing.unison == defaults.unison && legacy->sound.voicing.detune == defaults.detune
+          && legacy->sound.voicing.width == defaults.width && legacy->sound.matrix == custom.sound.matrix,
+          "Legacy patch failed to load with default voicing");
+    check(!decodePatch(encoded.substr(0, voicing) + "VOICING 2 0.1 5 50 1\n" + encoded.substr(matrix)),
+          "Out-of-range unison was accepted");
 }
 }
 
@@ -142,6 +277,8 @@ int main()
         const WaveBank bank;
         notes(bank);
         modulationAndPolyphony(bank);
+        monoPlaying(bank);
+        glideAndUnison(bank);
         patches();
         std::cout << "MO-T 11 headless checks passed\n";
     }

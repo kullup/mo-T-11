@@ -212,6 +212,7 @@ void Synth::prepare(double newRate) noexcept
     smoothing = 1.0f - std::exp(-seconds / 0.006f);
     tableStep = seconds / 0.012f;
     voices = {};
+    heldCount = 0;
     globalPhases = {};
     age = 0;
     controlStep = 0;
@@ -222,12 +223,29 @@ void Synth::prepare(double newRate) noexcept
 
 void Synth::setPatch(const Patch& newPatch) noexcept
 {
+    const auto previousMode = patch.voicing.mode;
     patch = newPatch;
+    const int count = std::clamp(patch.voicing.unison, 1, maxUnison);
+    patch.voicing.unison = count;
+    for (int i = 0; i < count; ++i)
+    {
+        const float spread = count == 1 ? 0.0f : 2.0f * i / (count - 1) - 1.0f;
+        unisonPan[i] = spread * patch.voicing.width;
+        unisonRatio[i] = std::exp2(spread * patch.voicing.detune / 1200.0f);
+    }
     routeCount = 0;
     for (int from = 0; from < sourceCount; ++from)
         for (int to = 0; to < destinationCount; ++to)
             if (patch.matrix[from][to] != 0.0f)
                 routes[routeCount++] = { from, to, patch.matrix[from][to] };
+    changeVoiceMode(previousMode);
+    if (patch.voicing.glide <= 0.0f)
+        for (auto& v : voices)
+            if (v.glideSamples > 0)
+            {
+                v.noteFrequency = v.targetNoteFrequency;
+                v.glideSamples = 0;
+            }
     controlStep = 0;
 }
 
@@ -247,7 +265,7 @@ void Synth::retire(Voice& v) noexcept
     }
 }
 
-void Synth::startVoice(const Event& e) noexcept
+void Synth::startVoice(const Event& e, bool held) noexcept
 {
     Voice* selected = nullptr;
     for (auto& v : voices)
@@ -271,24 +289,156 @@ void Synth::startVoice(const Event& e) noexcept
         });
     }
 
-    retire(*selected);
-    auto& v = *selected;
-    v = {};
+    trigger(*selected, e);
+    selected->held = held;
+}
+
+void Synth::setVoiceNote(Voice& v, const Event& e, double glideFrom) noexcept
+{
     v.port = e.port;
     v.channel = e.channel;
     v.note = e.note;
-    v.noteFrequency = 440.0f * std::exp2((e.note - 69) / 12.0f);
+    v.targetNoteFrequency = 440.0 * std::exp2((e.note - 69) / 12.0);
+    v.glideSamples = glideFrom > 0.0 ? static_cast<int>(patch.voicing.glide * rate) : 0;
+    v.noteFrequency = v.targetNoteFrequency;
+    if (v.glideSamples > 0)
+    {
+        v.noteFrequency = glideFrom;
+        v.glideRatio = std::pow(v.targetNoteFrequency / glideFrom, 1.0 / v.glideSamples);
+    }
     v.velocity = unit(e.velocity);
     v.controls = e.controls;
     v.held = true;
     v.age = ++age;
+}
+
+void Synth::trigger(Voice& v, const Event& e, double glideFrom) noexcept
+{
+    retire(v);
+    v = {};
+    setVoiceNote(v, e, glideFrom);
+    v.velocityGain = v.velocity;
     v.amp.stage = v.filter.stage = Env::attack;
-    for (std::size_t i = 0; i < v.phases.size(); ++i)
+    for (std::size_t i = 0; i < v.layers.size(); ++i)
     {
         const auto& osc = patch.osc[i];
         const auto seed = static_cast<std::uint32_t>(v.age) * 2654435761u + static_cast<std::uint32_t>(i) * 2246822519u;
-        v.phases[i] = osc.resetPhase ? osc.phase : static_cast<float>(seed >> 8) / 16777216.0f;
+        for (int layer = 0; layer < maxUnison; ++layer)
+        {
+            const auto layerSeed = seed + static_cast<std::uint32_t>(layer) * 1597334677u;
+            v.layers[i][layer].phase = osc.resetPhase ? osc.phase + 0.11f * layer
+                                                     : static_cast<float>(layerSeed >> 8) / 16777216.0f;
+        }
         v.table[i] = v.previousTable[i] = osc.table;
+    }
+}
+
+void Synth::trackNotes(const Event& e) noexcept
+{
+    const bool pressed = e.type == EventType::noteOn && e.velocity > 0.0f;
+    const bool released = e.type == EventType::noteOff || (e.type == EventType::noteOn && !pressed);
+    std::size_t remaining = 0;
+    for (std::size_t i = 0; i < heldCount; ++i)
+    {
+        auto& entry = heldNotes[i];
+        auto& on = entry.on;
+        const bool samePort = on.port == e.port;
+        if (samePort && e.type == EventType::disconnect)
+            continue;
+        if (samePort && on.channel == e.channel)
+        {
+            if (e.type == EventType::allSoundOff || (pressed && on.note == e.note))
+                continue;
+            if (e.type == EventType::expression)
+                on.controls = e.controls;
+            if (e.type == EventType::allNotesOff || (released && on.note == e.note))
+                entry.held = false;
+            if (!entry.held && !on.controls.sustain)
+                continue;
+        }
+        heldNotes[remaining++] = entry;
+    }
+    heldCount = remaining;
+    if (pressed)
+    {
+        if (heldCount == heldNotes.size())
+        {
+            std::move(heldNotes.begin() + 1, heldNotes.end(), heldNotes.begin());
+            --heldCount;
+        }
+        heldNotes[heldCount++] = { e, true };
+    }
+}
+
+const Synth::HeldNote* Synth::monoNote() const noexcept
+{
+    for (std::size_t i = heldCount; i > 0; --i)
+        if (heldNotes[i - 1].held)
+            return &heldNotes[i - 1];
+    return heldCount == 0 ? nullptr : &heldNotes[heldCount - 1];
+}
+
+void Synth::updateMono(bool retrigger) noexcept
+{
+    auto& voice = voices.front();
+    const auto* next = monoNote();
+    if (next == nullptr)
+    {
+        voice.held = false;
+        voice.amp.noteOff();
+        voice.filter.noteOff();
+        return;
+    }
+
+    const auto& on = next->on;
+    const bool gated = voice.amp.stage != Env::idle && voice.amp.stage != Env::release;
+    const bool sameNote = voice.port == on.port && voice.channel == on.channel && voice.note == on.note;
+    if (!gated || !sameNote || retrigger)
+    {
+        const double glideFrom = gated ? voice.noteFrequency : 0.0;
+        if (gated && !sameNote && patch.voicing.mode == PlayMode::legato)
+            setVoiceNote(voice, on, glideFrom);
+        else
+            trigger(voice, on, glideFrom);
+    }
+    voice.held = next->held;
+    voice.controls = on.controls;
+    controlStep = 0;
+}
+
+void Synth::changeVoiceMode(PlayMode previous) noexcept
+{
+    const auto next = patch.voicing.mode;
+    if (previous == next)
+        return;
+    if (previous == PlayMode::poly)
+    {
+        if (const auto* note = monoNote())
+        {
+            const auto& on = note->on;
+            const auto current = std::find_if(voices.begin(), voices.end(), [&](const Voice& v)
+            {
+                return v.amp.stage != Env::idle && v.amp.stage != Env::release
+                    && v.port == on.port && v.channel == on.channel && v.note == on.note;
+            });
+            if (current != voices.end())
+                std::iter_swap(voices.begin(), current);
+            else
+                retire(voices.front());
+        }
+        for (auto it = voices.begin() + 1; it != voices.end(); ++it)
+            retire(*it);
+        updateMono(false);
+    }
+    else if (next == PlayMode::poly)
+    {
+        const auto* current = monoNote();
+        for (std::size_t i = 0; i < heldCount; ++i)
+        {
+            const auto& entry = heldNotes[i];
+            if (&entry != current)
+                startVoice(entry.on, entry.held);
+        }
     }
 }
 
@@ -297,9 +447,24 @@ void Synth::event(const Event& e) noexcept
     if (e.type == EventType::panic)
     {
         for (auto& v : voices) retire(v);
+        heldCount = 0;
         return;
     }
-    if (e.type == EventType::noteOn && e.velocity > 0.0f)
+    trackNotes(e);
+    const bool pressed = e.type == EventType::noteOn && e.velocity > 0.0f;
+    if (patch.voicing.mode != PlayMode::poly)
+    {
+        auto& voice = voices.front();
+        const bool sameChannel = voice.port == e.port && voice.channel == e.channel;
+        if (voice.port == e.port && (e.type == EventType::disconnect ||
+            (e.type == EventType::allSoundOff && sameChannel)))
+            retire(voice);
+        else if (e.type == EventType::expression && sameChannel)
+            voice.controls = e.controls;
+        updateMono(pressed);
+        return;
+    }
+    if (pressed)
     {
         startVoice(e);
         return;
@@ -356,11 +521,32 @@ void Synth::updateVoice(Voice& v) noexcept
         const auto& osc = patch.osc[i];
         const float tune = 12.0f * osc.octave + osc.semitone + osc.fine * 0.01f
                            + 2.0f * v.controls.bend + 12.0f * bipolar(mod[pitchA + i]);
-        v.targetFrequency[i] = v.noteFrequency * std::exp2(tune / 12.0f);
+        v.targetTuning[i] = std::exp2(tune / 12.0f);
         v.targetPosition[i] = unit(osc.position + mod[positionA + i]);
-        const float angle = (bipolar(osc.pan + mod[pan]) + 1.0f) * 0.5f * halfPi;
-        v.targetGainL[i] = osc.level * std::cos(angle);
-        v.targetGainR[i] = osc.level * std::sin(angle);
+        const int count = patch.voicing.unison;
+        const float centre = bipolar(osc.pan + mod[pan]);
+        const float level = osc.level / count;
+        for (int index = 0; index < maxUnison; ++index)
+        {
+            auto& layer = v.layers[i][index];
+            if (index < count)
+            {
+                const float angle = (bipolar(centre + unisonPan[index]) + 1.0f) * 0.5f * halfPi;
+                layer.targetGainL = level * std::cos(angle);
+                layer.targetGainR = level * std::sin(angle);
+                layer.targetRatio = unisonRatio[index];
+            }
+            else
+            {
+                layer.targetGainL = layer.targetGainR = 0.0f;
+            }
+            if (v.fresh)
+            {
+                layer.gainL = layer.targetGainL;
+                layer.gainR = layer.targetGainR;
+                layer.ratio = layer.targetRatio;
+            }
+        }
         if (v.table[i] != osc.table)
         {
             v.previousTable[i] = v.table[i];
@@ -374,10 +560,8 @@ void Synth::updateVoice(Voice& v) noexcept
     v.targetDamping = lerp(1.75f, 0.21f, unit(patch.resonance + mod[resonance]));
     if (v.fresh)
     {
-        v.frequency = v.targetFrequency;
+        v.tuning = v.targetTuning;
         v.position = v.targetPosition;
-        v.gainL = v.targetGainL;
-        v.gainR = v.targetGainR;
         v.g = v.targetG;
         v.damping = v.targetDamping;
         v.fresh = false;
@@ -412,29 +596,43 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
             v.filter.tick(patch.filterEnv, seconds);
             if (update || v.fresh)
                 updateVoice(v);
+            if (v.glideSamples > 0)
+            {
+                --v.glideSamples;
+                v.noteFrequency = v.glideSamples == 0 ? v.targetNoteFrequency : v.noteFrequency * v.glideRatio;
+            }
             for (std::size_t i = 0; i < v.lfoPhases.size(); ++i)
                 advance(v.lfoPhases[i], patch.lfos[i].rate * seconds);
 
             float voiceL = 0.0f, voiceR = 0.0f;
             for (int i = 0; i < 2; ++i)
             {
-                v.frequency[i] = lerp(v.frequency[i], v.targetFrequency[i], smoothing);
+                v.tuning[i] = lerp(v.tuning[i], v.targetTuning[i], smoothing);
                 v.position[i] = lerp(v.position[i], v.targetPosition[i], smoothing);
-                v.gainL[i] = lerp(v.gainL[i], v.targetGainL[i], smoothing);
-                v.gainR[i] = lerp(v.gainR[i], v.targetGainR[i], smoothing);
-                if (v.gainL[i] + v.gainR[i] > 0.00001f)
+                const float base = static_cast<float>(v.noteFrequency) * v.tuning[i];
+                for (int index = 0; index < maxUnison; ++index)
                 {
-                    float value = waveBank.sample(v.table[i], v.position[i], v.phases[i], v.frequency[i], rate);
-                    if (v.tableMix[i] < 1.0f)
+                    auto& layer = v.layers[i][index];
+                    if (index >= patch.voicing.unison && layer.gainL + layer.gainR <= 0.00001f)
+                        continue;
+                    layer.ratio = lerp(layer.ratio, layer.targetRatio, smoothing);
+                    layer.gainL = lerp(layer.gainL, layer.targetGainL, smoothing);
+                    layer.gainR = lerp(layer.gainR, layer.targetGainR, smoothing);
+                    const float hz = base * layer.ratio;
+                    if (layer.gainL + layer.gainR > 0.00001f)
                     {
-                        const float previous = waveBank.sample(v.previousTable[i], v.position[i], v.phases[i], v.frequency[i], rate);
-                        value = lerp(previous, value, v.tableMix[i]);
+                        float value = waveBank.sample(v.table[i], v.position[i], layer.phase, hz, rate);
+                        if (v.tableMix[i] < 1.0f)
+                        {
+                            const float previous = waveBank.sample(v.previousTable[i], v.position[i], layer.phase, hz, rate);
+                            value = lerp(previous, value, v.tableMix[i]);
+                        }
+                        voiceL += value * layer.gainL;
+                        voiceR += value * layer.gainR;
                     }
-                    voiceL += value * v.gainL[i];
-                    voiceR += value * v.gainR[i];
+                    advance(layer.phase, hz * seconds);
                 }
                 v.tableMix[i] = unit(v.tableMix[i] + tableStep);
-                advance(v.phases[i], v.frequency[i] * seconds);
             }
             v.g = lerp(v.g, v.targetG, smoothing);
             v.damping = lerp(v.damping, v.targetDamping, smoothing);
@@ -445,7 +643,8 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
             {
                 return lerp(value, std::tanh(value * (1.0f + 6.0f * drive)), drive);
             };
-            const float amplitude = amp * v.velocity * 0.23f;
+            v.velocityGain = lerp(v.velocityGain, v.velocity, smoothing);
+            const float amplitude = amp * v.velocityGain * 0.23f;
             v.lastL = v.filters[0].tick(saturate(voiceL), a1, a2, a3, v.damping, patch.filterMode) * amplitude;
             v.lastR = v.filters[1].tick(saturate(voiceR), a1, a2, a3, v.damping, patch.filterMode) * amplitude;
             mixL += v.lastL;

@@ -100,7 +100,7 @@ std::string encodePatch(const NamedPatch& named)
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << std::setprecision(std::numeric_limits<float>::max_digits10);
-    out << "MOT11 1\nNAME " << std::quoted(named.name) << '\n';
+    out << "MOT11 2\nNAME " << std::quoted(named.name) << '\n';
     for (std::size_t i = 0; i < p.osc.size(); ++i)
     {
         const auto& o = p.osc[i];
@@ -122,7 +122,9 @@ std::string encodePatch(const NamedPatch& named)
         out << (i == 0 ? "LFO_1" : "LFO_2") << ' ' << lfo.rate << ' ' << lfo.depth << ' '
             << static_cast<int>(lfo.shape) << ' ' << lfo.restart << '\n';
     }
-    out << "MATRIX\n";
+    const auto& v = p.voicing;
+    out << "VOICING " << static_cast<int>(v.mode) << ' ' << v.glide << ' ' << v.unison
+        << ' ' << v.detune << ' ' << v.width << "\nMATRIX\n";
     for (const auto& row : p.matrix)
     {
         for (auto value : row)
@@ -150,7 +152,7 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
 
     NamedPatch named;
     int version = 0;
-    if (!readTag("MOT11") || !(in >> version) || version != 1 || !readTag("NAME")
+    if (!readTag("MOT11") || !readRange(version, 1, 2) || !readTag("NAME")
         || !(in >> std::quoted(named.name)) || named.name.empty() || named.name.size() > 96
         || named.name.find_first_of("\r\n\t") != std::string::npos
         || named.name.find('\0') != std::string::npos)
@@ -190,6 +192,16 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
             || !readRange(lfo.depth, 0, 1) || !readRange(shape, 0, 3) || !(in >> lfo.restart))
             return std::nullopt;
         lfo.shape = static_cast<Shape>(shape);
+    }
+    if (version == 2)
+    {
+        auto& v = p.voicing;
+        int playMode = 0;
+        if (!readTag("VOICING") || !readRange(playMode, 0, 2) || !readRange(v.glide, 0, maxGlide)
+            || !readRange(v.unison, 1, maxUnison) || !readRange(v.detune, 0, maxUnisonDetune)
+            || !readRange(v.width, 0, 1))
+            return std::nullopt;
+        v.mode = static_cast<PlayMode>(playMode);
     }
     if (!readTag("MATRIX"))
         return std::nullopt;

@@ -337,9 +337,17 @@ private:
     void holdMouse(int next)
     {
         if (mouseNote == next) return;
-        if (mouseNote >= 0 && !computerHeld(mouseNote)) audio.play(midi(mouseNote), false);
+        const auto play = [this](int note, bool pressed)
+        {
+            if (note >= 0 && !computerHeld(note))
+                audio.play(midi(note), pressed);
+        };
+        const bool poly = audio.patch().sound.voicing.mode == PlayMode::poly;
+        // A mono drag overlaps the keys so the gate stays open across the transition.
+        if (poly) play(mouseNote, false);
+        play(next, true);
+        if (!poly) play(mouseNote, false);
         mouseNote = next;
-        if (mouseNote >= 0 && !computerHeld(mouseNote)) audio.play(midi(mouseNote), true);
         repaint();
     }
 
@@ -384,6 +392,7 @@ public:
         createEnvelopes();
         createLfos();
         createMatrix();
+        createVoicing();
         createKeyboard();
         syncControls();
 
@@ -423,6 +432,7 @@ public:
             paintWavetable(g);
         paintLfoAndEnvelope(g);
         paintMatrix(g);
+        paintVoicing(g);
         paintPerformance(g);
         for (const auto& entry : sliders)
         {
@@ -455,9 +465,13 @@ private:
     inline static const Rectangle<int> envPanel { 655, 111, 210, 425 };
     inline static const Rectangle<int> lfoPanel { 875, 111, 169, 425 };
     inline static const Rectangle<int> matrixPanel { 1054, 111, 364, 425 };
+    inline static const Rectangle<int> voicingPanel { 22, 550, 1396, 104 };
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
     inline static const Rectangle<int> waveDisplay { 100, 195, 266, 198 };
     inline static const Rectangle<int> amountDisplay { 1069, 156, 334, 57 };
+    inline static const Rectangle<int> modeDisplay { 312, 570, 299, 62 };
+    inline static const Rectangle<int> performanceStatus { 117, 683, 267, 84 };
+    inline static const std::array<const char*, 3> modeNames { "POLY", "MONO", "LEGATO" };
 
     juce::TextButton& button(const String& caption, const String& name, Rectangle<int> area,
                              std::function<void()> action, bool onHeader = false)
@@ -543,6 +557,8 @@ private:
         viewButton->setButtonText(stacked ? "STACK" : "CYCLE");
         phaseButton->setButtonText(osc.resetPhase ? "RESET" : "FREE");
         phaseButton->setToggleState(osc.resetPhase, juce::dontSendNotification);
+        for (std::size_t i = 0; i < modeButtons.size(); ++i)
+            modeButtons[i]->setToggleState(static_cast<PlayMode>(i) == p.voicing.mode, juce::dontSendNotification);
         static constexpr const char* modes[] { "LP  /  LOW PASS", "BP  /  BAND PASS", "HP  /  HIGH PASS" };
         filterMode->setButtonText(modes[static_cast<int>(p.filterMode)]);
         static constexpr const char* shapes[] { "SINE", "TRI", "RAMP", "SQR" };
@@ -710,14 +726,47 @@ private:
         });
     }
 
+    void createVoicing()
+    {
+        const std::array<const char*, 3> descriptions {
+            "Polyphonic play", "Mono with envelope retrigger", "Mono legato with continuous envelopes"
+        };
+        for (std::size_t i = 0; i < modeButtons.size(); ++i)
+        {
+            const auto mode = static_cast<PlayMode>(i);
+            modeButtons[i] = &button(modeNames[i], descriptions[i], { 36 + 86 * static_cast<int>(i), 601, 77, 31 },
+                                     [this, mode]
+            {
+                if (audio.patch().sound.voicing.mode != mode)
+                    edit([mode](Patch& p) { p.voicing.mode = mode; });
+            });
+        }
+        slider("Glide time between overlapping Mono or Legato notes", "GLIDE", { 698, 558, 62, 62 },
+               false, 0, maxGlide, 0.001,
+               [](const Patch& p) { return p.voicing.glide; },
+               [](Patch& p, double v) { p.voicing.glide = static_cast<float>(v); },
+               [](double v) { return v == 0.0 ? String("Off") : seconds(v); }, 0.15);
+        slider("Unison layers per note", "UNISON", { 878, 558, 62, 62 }, false, 1, maxUnison, 1,
+               [](const Patch& p) { return p.voicing.unison; },
+               [](Patch& p, double v) { p.voicing.unison = static_cast<int>(v); },
+               [](double v) { return String(static_cast<int>(v)) + "x"; });
+        slider("Unison detune in cents", "DETUNE", { 1067, 558, 62, 62 }, false, 0, maxUnisonDetune, 1,
+               [](const Patch& p) { return p.voicing.detune; },
+               [](Patch& p, double v) { p.voicing.detune = static_cast<float>(v); },
+               [](double v) { return String(juce::roundToInt(v)) + " ct"; });
+        slider("Unison stereo width", "WIDTH", { 1256, 558, 62, 62 }, false, 0, 1, 0.01,
+               [](const Patch& p) { return p.voicing.width; },
+               [](Patch& p, double v) { p.voicing.width = static_cast<float>(v); }, percent);
+    }
+
     void createKeyboard()
     {
-        slider("Master output volume", "VOLUME", { 42, 565, 62, 62 }, false, 0, 1, 0.001,
+        slider("Master output volume", "VOLUME", { 42, 681, 62, 62 }, false, 0, 1, 0.001,
                [](const Patch& p) { return p.volume; }, [](Patch& p, double v) { p.volume = static_cast<float>(v); }, percent);
-        octaveDown = &button("-", "Lower keyboard octave", { 405, 607, 31, 29 }, [this] { changeOctave(-1); });
-        octaveUp = &button("+", "Raise keyboard octave", { 451, 607, 31, 29 }, [this] { changeOctave(1); });
+        octaveDown = &button("-", "Lower keyboard octave", { 405, 723, 31, 29 }, [this] { changeOctave(-1); });
+        octaveUp = &button("+", "Raise keyboard octave", { 451, 723, 31, 29 }, [this] { changeOctave(1); });
         addAndMakeVisible(keys);
-        keys.setBounds(502, 570, 894, 74);
+        keys.setBounds(502, 686, 894, 74);
     }
 
     void changeOctave(int step)
@@ -843,13 +892,13 @@ private:
         message = std::move(text);
         messageIsError = error;
         messageEnd = juce::Time::getMillisecondCounterHiRes() + 4000.0;
-        repaint(117, 567, 267, 84);
+        repaint(performanceStatus);
     }
 
     void timerCallback() override
     {
         repaint(1100, 35, 185, 55);
-        repaint(117, 567, 267, 84);
+        repaint(performanceStatus);
     }
 
     void paintPlate(Graphics& g, Rectangle<int> area, const String& heading) const
@@ -991,26 +1040,41 @@ private:
         label(g, "AMOUNT", { 1341, 324, 68, 15 }, 10.5f, quiet, juce::Justification::centred, true);
     }
 
+    void paintVoicing(Graphics& g) const
+    {
+        paintPlate(g, voicingPanel, "VOICING");
+        display(g, modeDisplay);
+        const auto mode = static_cast<std::size_t>(audio.patch().sound.voicing.mode);
+        const std::array<String, 3> details {
+            String(Synth::polyphony) + " NOTE POLYPHONY", "LAST NOTE / RETRIGGER", "LAST NOTE / ENVELOPE HOLD"
+        };
+        pixels(g, modeNames[mode], 328, 582, 2, amber);
+        pixels(g, details[mode], 328, 610, 1, amber.withAlpha(0.72f));
+        g.setColour(line);
+        for (int x : { 638, 815 })
+            g.drawVerticalLine(x, 569.0f, 636.0f);
+    }
+
     void paintPerformance(Graphics& g) const
     {
-        const Rectangle<float> area { 22, 550, 1396, 112 };
+        const Rectangle<float> area { 22, 666, 1396, 112 };
         g.setColour(Colour(0xffc4c1b6));
         g.fillRoundedRectangle(area, 6.0f);
         g.setColour(line.darker(0.1f));
         g.drawRoundedRectangle(area.reduced(0.5f), 6.0f, 1.0f);
         g.setColour(quiet.withAlpha(0.5f));
-        g.drawVerticalLine(113, 570.0f, 642.0f);
-        g.drawVerticalLine(385, 570.0f, 642.0f);
-        label(g, "PERFORMANCE", { 128, 571, 244, 20 }, 13.0f, ink, juce::Justification::centredLeft, true);
+        g.drawVerticalLine(113, 686.0f, 758.0f);
+        g.drawVerticalLine(385, 686.0f, 758.0f);
+        label(g, "PERFORMANCE", { 128, 687, 244, 20 }, 13.0f, ink, juce::Justification::centredLeft, true);
         const auto info = "MIDI " + String(audio.inputCount()) + " IN  /  " + String(audio.voiceCount()).paddedLeft('0', 2) + " VOICES";
-        pixels(g, info, 128, 602, 1, blue.darker(0.2f));
+        pixels(g, info, 128, 718, 1, blue.darker(0.2f));
         g.setColour(audio.hasRecentMidiNote() ? mark : quiet.withAlpha(0.25f));
-        g.fillEllipse(134.0f + 6.0f * info.length(), 603.0f, 5.0f, 5.0f);
+        g.fillEllipse(134.0f + 6.0f * info.length(), 719.0f, 5.0f, 5.0f);
         const bool showNotice = juce::Time::getMillisecondCounterHiRes() < messageEnd;
         const auto status = showNotice ? message : audio.unavailableInputs() > 0
             ? String(audio.unavailableInputs()) + " MIDI input(s) unavailable" : audio.audioStatus();
-        label(g, status, { 128, 620, 247, 19 }, 12.5f, showNotice && messageIsError ? mark : quiet);
-        label(g, "KEY OCT " + String(octave), { 399, 573, 89, 25 }, 12.0f, ink, juce::Justification::centred, true);
+        label(g, status, { 128, 736, 247, 19 }, 12.5f, showNotice && messageIsError ? mark : quiet);
+        label(g, "KEY OCT " + String(octave), { 399, 689, 89, 25 }, 12.0f, ink, juce::Justification::centred, true);
     }
 
     Standalone& audio;
@@ -1023,6 +1087,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::File fileDirectory;
     std::array<juce::TextButton*, 2> engineButtons {}, shapeButtons {}, lfoModeButtons {};
+    std::array<juce::TextButton*, 3> modeButtons {};
     juce::TextButton* viewButton = nullptr;
     juce::TextButton* phaseButton = nullptr;
     juce::TextButton* filterMode = nullptr;

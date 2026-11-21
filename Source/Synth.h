@@ -67,26 +67,40 @@ private:
 
     struct Voice
     {
+        struct Layer
+        {
+            float phase = 0, ratio = 1, targetRatio = 1;
+            float gainL = 0, gainR = 0, targetGainL = 0, targetGainR = 0;
+        };
+
         std::uint32_t port = 0;
         int channel = 1, note = 60;
         std::uint64_t age = 0;
         bool held = false, fresh = true;
-        float velocity = 1.0f, noteFrequency = 440.0f;
+        float velocity = 1.0f, velocityGain = 1.0f;
+        double noteFrequency = 440.0, targetNoteFrequency = 440.0, glideRatio = 1.0;
+        int glideSamples = 0;
         Controllers controls {};
         Env amp, filter;
         std::array<Filter, 2> filters {};
-        std::array<float, 2> phases {}, lfoPhases {};
-        std::array<float, 2> frequency {}, position {}, gainL {}, gainR {};
-        std::array<float, 2> targetFrequency {}, targetPosition {}, targetGainL {}, targetGainR {};
+        std::array<std::array<Layer, maxUnison>, 2> layers {};
+        std::array<float, 2> lfoPhases {}, tuning {}, position {}, targetTuning {}, targetPosition {};
         std::array<int, 2> table {}, previousTable {};
         std::array<float, 2> tableMix { 1.0f, 1.0f };
         float g = 0, damping = 0, targetG = 0, targetDamping = 0;
         float lastL = 0, lastR = 0;
     };
 
+    struct HeldNote { Event on; bool held; };
     struct Route { int source, target; float amount; };
     void event(const Event&) noexcept;
-    void startVoice(const Event&) noexcept;
+    void trackNotes(const Event&) noexcept;
+    const HeldNote* monoNote() const noexcept;
+    void updateMono(bool retrigger) noexcept;
+    void changeVoiceMode(PlayMode previous) noexcept;
+    void setVoiceNote(Voice&, const Event&, double glideFrom) noexcept;
+    void trigger(Voice&, const Event&, double glideFrom = 0.0) noexcept;
+    void startVoice(const Event&, bool held = true) noexcept;
     void updateVoice(Voice&) noexcept;
     void advance(float& phase, float increment) const noexcept;
     void retire(Voice&) noexcept;
@@ -94,8 +108,11 @@ private:
     const WaveBank& waveBank;
     Patch patch;
     std::array<Voice, polyphony> voices {};
+    std::array<HeldNote, 256> heldNotes {};
+    std::size_t heldCount = 0;
     std::array<Route, sourceCount * destinationCount> routes {};
     std::size_t routeCount = 0;
+    std::array<float, maxUnison> unisonPan {}, unisonRatio { 1.0f };
     std::array<float, 2> globalPhases {};
     std::uint64_t age = 0;
     float rate = 48000.0f, seconds = 1.0f / 48000.0f;

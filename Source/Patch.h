@@ -11,11 +11,14 @@ constexpr int tableCount = 6;
 constexpr int sourceCount = 8;
 constexpr int destinationCount = 7;
 constexpr int presetCount = 8;
+constexpr int maxUnison = 4;
+constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 
 enum Source { lfo1, lfo2, filterEnvelope, ampEnvelope, velocity, keyTrack, wheel, pressure };
 enum Destination { positionA, positionB, pitchA, pitchB, cutoff, resonance, pan };
 enum class FilterMode { lowPass, bandPass, highPass };
 enum class Shape { sine, triangle, ramp, square };
+enum class PlayMode { poly, mono, legato };
 
 inline constexpr std::array<const char*, tableCount> tableNames {
     "Basic Shapes", "Pulse Width", "Hollow Body", "Harmonic Ladder", "Folded Sine", "Glass Formants"
@@ -45,6 +48,14 @@ struct Lfo
     bool restart = false;
 };
 
+struct Voicing
+{
+    PlayMode mode = PlayMode::poly;
+    float glide = 0.0f;
+    int unison = 1;
+    float detune = 12.0f, width = 0.75f;
+};
+
 struct Patch
 {
     std::array<Oscillator, 2> osc { Oscillator {}, Oscillator { 0, 0.6f, 0.0f } };
@@ -54,6 +65,7 @@ struct Patch
     Envelope ampEnv { 0.008f, 0.24f, 0.80f, 0.20f };
     std::array<Lfo, 2> lfos { Lfo {}, Lfo { 0.37f, 1.0f, Shape::triangle, false } };
     std::array<std::array<float, destinationCount>, sourceCount> matrix {};
+    Voicing voicing;
 };
 
 struct NamedPatch { std::string name; Patch sound; };
