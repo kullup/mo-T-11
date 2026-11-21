@@ -239,7 +239,7 @@ public:
     explicit PerformanceKeys(Standalone& instrument) : audio(instrument)
     {
         setTitle("Audition keyboard");
-        setDescription("Click or drag across keys. With focus, play A W S E D F T G Y H U J K.");
+        setDescription("Click or drag across keys, or play A W S E D F T G Y H U J K in the synth window.");
         setTooltip(getDescription());
         setWantsKeyboardFocus(true);
     }
@@ -274,10 +274,10 @@ public:
     void mouseDown(const juce::MouseEvent& e) override { grabKeyboardFocus(); holdMouse(noteAt(e.position)); }
     void mouseDrag(const juce::MouseEvent& e) override { holdMouse(noteAt(e.position)); }
     void mouseUp(const juce::MouseEvent&) override { holdMouse(-1); }
-    void focusLost(FocusChangeType) override { release(); repaint(); }
+    void focusLost(FocusChangeType) override { repaint(); }
     void focusGained(FocusChangeType) override { repaint(); }
 
-    bool keyPressed(const juce::KeyPress& press) override
+    bool playComputerKey(const juce::KeyPress& press)
     {
         if (press.getKeyCode() == juce::KeyPress::escapeKey)
         {
@@ -285,7 +285,8 @@ public:
             audio.panic();
             return true;
         }
-        const auto ascii = juce::CharacterFunctions::toLowerCase(press.getTextCharacter());
+        const auto character = press.getTextCharacter() != 0 ? press.getTextCharacter() : press.getKeyCode();
+        const auto ascii = juce::CharacterFunctions::toLowerCase(character);
         const auto index = ascii < 128 ? mapping.find(static_cast<char>(ascii)) : std::string_view::npos;
         if (index == std::string_view::npos || press.getModifiers().isCommandDown() || press.getModifiers().isAltDown())
             return false;
@@ -293,10 +294,8 @@ public:
         return true;
     }
 
-    bool keyStateChanged(bool isKeyDown) override
+    bool releaseComputerKeys()
     {
-        if (isKeyDown)
-            return false;
         bool changed = false;
         for (unsigned i = 0; i < computer.size(); ++i)
             if (computer[i] && !juce::KeyPress::isKeyCurrentlyDown(juce::CharacterFunctions::toUpperCase(mapping[i])))
@@ -402,6 +401,10 @@ public:
         keys.release();
         setLookAndFeel(nullptr);
     }
+
+    bool playComputerKey(const juce::KeyPress& press) { return keys.playComputerKey(press); }
+    bool releaseComputerKeys() { return keys.releaseComputerKeys(); }
+    void releasePerformanceKeys() { keys.release(); }
 
     void paint(Graphics& g) override
     {
@@ -750,6 +753,7 @@ private:
 
     void showPresets()
     {
+        keys.release();
         juce::PopupMenu menu;
         for (int i = 0; i < presetCount; ++i)
             menu.addItem(i + 1, String(i + 1).paddedLeft('0', 2) + "   " + String(factoryPresets()[i].name),
@@ -760,6 +764,7 @@ private:
 
     void chooseFile(bool saving)
     {
+        keys.release();
         const auto directory = fileDirectory.isDirectory() ? fileDirectory
             : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
         const auto name = juce::File::createLegalFileName(String::fromUTF8(audio.patch().name.c_str()));
@@ -804,6 +809,7 @@ private:
 
     void showOutputs()
     {
+        keys.release();
         auto outputs = audio.outputs();
         juce::PopupMenu menu;
         menu.addSectionHeader("Audio output");
@@ -998,6 +1004,8 @@ private:
         label(g, "PERFORMANCE", { 128, 571, 244, 20 }, 13.0f, ink, juce::Justification::centredLeft, true);
         const auto info = "MIDI " + String(audio.inputCount()) + " IN  /  " + String(audio.voiceCount()).paddedLeft('0', 2) + " VOICES";
         pixels(g, info, 128, 602, 1, blue.darker(0.2f));
+        g.setColour(audio.hasRecentMidiNote() ? mark : quiet.withAlpha(0.25f));
+        g.fillEllipse(134.0f + 6.0f * info.length(), 603.0f, 5.0f, 5.0f);
         const bool showNotice = juce::Time::getMillisecondCounterHiRes() < messageEnd;
         const auto status = showNotice ? message : audio.unavailableInputs() > 0
             ? String(audio.unavailableInputs()) + " MIDI input(s) unavailable" : audio.audioStatus();
@@ -1035,6 +1043,10 @@ Panel::Panel(Standalone& audio) : surface(std::make_unique<Surface>(audio))
 }
 
 Panel::~Panel() = default;
+
+bool Panel::playComputerKey(const juce::KeyPress& press) { return surface->playComputerKey(press); }
+bool Panel::releaseComputerKeys() { return surface->releaseComputerKeys(); }
+void Panel::releasePerformanceKeys() { surface->releasePerformanceKeys(); }
 
 void Panel::paint(Graphics& g) { g.fillAll(dark); }
 

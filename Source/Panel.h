@@ -12,6 +12,9 @@ public:
     static constexpr int designWidth = 1440, designHeight = 684;
     explicit Panel(Standalone& app);
     ~Panel() override;
+    bool playComputerKey(const juce::KeyPress&);
+    bool releaseComputerKeys();
+    void releasePerformanceKeys();
     void paint(juce::Graphics&) override;
     void resized() override;
 

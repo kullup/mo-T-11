@@ -66,6 +66,7 @@ Standalone::Standalone() : settings(std::make_unique<juce::PropertiesFile>(setti
     audioError = deviceManager.initialise(0, 2, saved.get(), true);
     deviceManager.addAudioCallback(this);
     deviceManager.addChangeListener(this);
+    midiDeviceChanges = juce::MidiDeviceListConnection::make([this] { refreshMidi(); });
     refreshMidi();
     startTimerHz(1);
 }
@@ -73,6 +74,7 @@ Standalone::Standalone() : settings(std::make_unique<juce::PropertiesFile>(setti
 Standalone::~Standalone()
 {
     stopTimer();
+    midiDeviceChanges.reset();
     deviceManager.removeChangeListener(this);
     storeSession();
     settings->saveIfNeeded();
@@ -123,6 +125,11 @@ void Standalone::play(int note, bool on)
 }
 
 void Standalone::panic() { push({ EventType::panic }); }
+
+bool Standalone::hasRecentMidiNote() const noexcept
+{
+    return timeNow() - lastMidiNote.load(std::memory_order_relaxed) < 0.3;
+}
 
 void Standalone::storeSession()
 {
@@ -200,6 +207,7 @@ void Standalone::receive(Input& input, const juce::MidiMessage& message)
         e.type = EventType::noteOn;
         e.note = message.getNoteNumber();
         e.velocity = message.getFloatVelocity();
+        lastMidiNote.store(timeNow(), std::memory_order_relaxed);
     }
     else if (message.isNoteOff())
     {

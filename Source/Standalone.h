@@ -29,6 +29,7 @@ public:
     void panic();
     int inputCount() const noexcept { return static_cast<int>(inputs.size()); }
     int unavailableInputs() const noexcept { return unavailable; }
+    bool hasRecentMidiNote() const noexcept;
     int voiceCount() const noexcept { return voices.load(std::memory_order_relaxed); }
     float outputPeak() const noexcept { return peak.load(std::memory_order_relaxed); }
 
@@ -74,6 +75,7 @@ private:
     juce::String audioError;
 
     std::vector<std::unique_ptr<Input>> inputs;
+    juce::MidiDeviceListConnection midiDeviceChanges;
     std::uint32_t nextPort = 1;
     int unavailable = 0;
     std::mutex producers;
@@ -83,6 +85,7 @@ private:
     std::atomic<bool> overflow { false };
     std::atomic<int> voices { 0 };
     std::atomic<float> peak { 0 };
+    std::atomic<double> lastMidiNote { -1 };
     double audioRate = 48000;
 };
 }

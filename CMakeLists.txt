@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(MOT11 VERSION 0.1.0 LANGUAGES C CXX)
+project(MOT11 VERSION 0.1.1 LANGUAGES C CXX)
 
 option(MOT_BUILD_APP "Build the JUCE desktop instrument" ON)
 set(MOT_JUCE_DIR "" CACHE PATH "Path to an optional local JUCE 8.0.12 checkout")
@@ -30,6 +30,9 @@ if(MOT_BUILD_APP)
     juce_add_gui_app(MOT11 PRODUCT_NAME "MO-T 11" BUNDLE_ID "org.mot11.synth")
     target_sources(MOT11 PRIVATE Source/Main.cpp Source/Standalone.cpp Source/Panel.cpp)
     target_compile_definitions(MOT11 PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    if(WIN32)
+        target_compile_definitions(MOT11 PRIVATE JUCE_USE_WINRT_MIDI=1)
+    endif()
     target_link_libraries(MOT11 PRIVATE mot_core juce::juce_audio_devices
         juce::juce_gui_basics juce::juce_recommended_config_flags)
 endif()

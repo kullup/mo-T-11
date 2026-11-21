@@ -29,6 +29,27 @@ public:
 
     void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
 
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (auto* panel = performancePanel(); panel != nullptr && panel->playComputerKey(key))
+            return true;
+        return DocumentWindow::keyPressed(key);
+    }
+
+    bool keyStateChanged(bool isKeyDown) override
+    {
+        if (auto* panel = performancePanel(); !isKeyDown && panel != nullptr && panel->releaseComputerKeys())
+            return true;
+        return DocumentWindow::keyStateChanged(isKeyDown);
+    }
+
+    void activeWindowStatusChanged() override
+    {
+        DocumentWindow::activeWindowStatusChanged();
+        if (auto* panel = performancePanel(); !isActiveWindow() && panel != nullptr)
+            panel->releasePerformanceKeys();
+    }
+
     void resized() override
     {
         DocumentWindow::resized();
@@ -40,6 +61,7 @@ public:
     }
 
 private:
+    mot::Panel* performancePanel() const noexcept { return static_cast<mot::Panel*>(getContentComponent()); }
     std::unique_ptr<juce::ResizableCornerComponent> grip;
 };
 
@@ -47,7 +69,7 @@ class Application final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "MO-T 11"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return "0.1.1"; }
     bool moreThanOneInstanceAllowed() override { return false; }
     void initialise(const juce::String&) override
     {

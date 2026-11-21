@@ -4,8 +4,8 @@ MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, two oscil
 
 ## Play
 
-- Launch **MO-T 11.exe**. It opens the system audio output and listens to all available MIDI inputs on channels 1–16. Click **Audio** to select a different output. The bottom panel shows the number of open MIDI inputs and active voices.
-- Play a MIDI controller or click and drag across the on-screen keys. With the keyboard focused, play `A W S E D F T G Y H U J K` from C to C. Use **−** and **+** to shift octaves. **Panic** clears sounding notes.
+- Launch **MO-T 11.exe**. It opens the system audio output and listens to available Windows MIDI inputs on channels 1–16. The bottom panel shows the number of open MIDI inputs and flashes when a MIDI note arrives. Click **Audio** to select a different output.
+- Play a MIDI controller or click and drag across the on-screen keys. In the synth window, play `A W S E D F T G Y H U J K` from C to C, including while editing controls. Use **−** and **+** to shift octaves. **Panic** clears sounding notes.
 - Browse patches with the header arrows or click the patch display to jump to a factory patch. **Open** and **Save** use `.motpatch` files. The app remembers the working patch and selected audio output between launches.
 - Drag a knob or fader, use the mouse wheel, or focus it and use the arrow keys. Double-click a control to return it to its Init value.
 
