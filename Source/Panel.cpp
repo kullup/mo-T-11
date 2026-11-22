@@ -306,14 +306,18 @@ public:
 private:
     struct Row { MatrixRoute route; float amount; };
 
-    void resized() override { list.setBounds(getLocalBounds().reduced(12)); }
+    void resized() override { list.setBounds(getLocalBounds().reduced(12, 8)); }
 
     static void centredPixels(Graphics& g, const String& text, int centreX, int centreY, Colour colour)
     {
         const float width = (text.length() * 6 - 1) * displayTextScale;
+        drawTextLine(g, text, std::round(centreX - width * 0.5f), centreY, colour);
+    }
+
+    static void drawTextLine(Graphics& g, const String& text, float x, int centreY, Colour colour)
+    {
         const float height = 7.0f * displayTextScale;
-        pixels(g, text, std::round(centreX - width * 0.5f), std::round(centreY - height * 0.5f),
-               displayTextScale, colour);
+        pixels(g, text, x, std::round(centreY - height * 0.5f), displayTextScale, colour);
     }
 
     void paint(Graphics& g) override
@@ -351,9 +355,9 @@ private:
         g.drawRect(0, 0, width, height, 1);
         g.drawVerticalLine(divider, 0.0f, static_cast<float>(height));
 
-        const int centre = divider / 2;
-        centredPixels(g, sourceNames[route.source], centre, height / 2 - 6, colour);
-        centredPixels(g, destinationNames[route.target], centre, height / 2 + 6, colour);
+        constexpr float textInset = 12.0f;
+        drawTextLine(g, sourceNames[route.source], textInset, height / 2 - 6, colour);
+        drawTextLine(g, destinationNames[route.target], textInset, height / 2 + 6, colour);
         centredPixels(g, matrixAmountText(amount), (divider + width) / 2, height / 2, colour);
     }
 
@@ -567,9 +571,10 @@ public:
         paintPlate(g, filterPanel, "FILTER");
         paintPlate(g, envPanel, "ENVELOPES");
         paintPlate(g, lfoPanel, "LFO");
-        paintPlate(g, matrixPanel, "MOD MATRIX");
+        paintPlate(g, matrixPanel, "MOD TABLE");
         paintLfoAndEnvelope(g);
-        label(g, "AMOUNT", { 1344, 516, 64, 14 }, 11.5f, ink, juce::Justification::centred, true);
+        const auto amountCaption = matrixAmountBounds.withY(matrixAmountBounds.getBottom() + 1).withHeight(15);
+        label(g, "AMOUNT", amountCaption, 12.0f, ink, juce::Justification::centred, true);
         paintPlate(g, voicingPanel, "VOICING");
         label(g, "PLAY MODE", { 36, 583, 246, 15 }, 11.5f, quiet, juce::Justification::centredLeft, true);
         paintPlate(g, effectsPanel, {});
@@ -600,21 +605,26 @@ private:
         bool fader;
     };
 
-    inline static const Rectangle<int> oscPanel { 22, 111, 475, 425 };
+    static constexpr int panelInset = 22, panelRight = designWidth - panelInset;
+    inline static const Rectangle<int> oscPanel { panelInset, 111, 475, 425 };
     inline static const Rectangle<int> filterPanel { 507, 111, 138, 425 };
     inline static const Rectangle<int> envPanel { 655, 111, 210, 425 };
     inline static const Rectangle<int> lfoPanel { 875, 111, 169, 425 };
-    inline static const Rectangle<int> matrixPanel { 1054, 111, 364, 425 };
-    inline static const Rectangle<int> voicingPanel { 22, 550, 623, 104 };
-    inline static const Rectangle<int> effectsPanel { 655, 550, 763, 104 };
+    inline static const Rectangle<int> matrixPanel { 1054, 111, panelRight - 1054, 425 };
+    inline static const Rectangle<int> voicingPanel { panelInset, 550, 623, 104 };
+    inline static const Rectangle<int> effectsPanel { 655, 550, panelRight - 655, 104 };
     inline static const int compactHeight = 676;
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
     inline static const std::array<const char*, oscillatorCount> oscillatorNames { "A", "B", "C" };
     enum OscillatorColumn { positionColumn, tuneColumn, fineColumn, volumeColumn };
     inline static const std::array<const char*, 4> oscillatorColumns { "POS", "TUNE", "FINE", "VOL" };
-    inline static const Rectangle<int> matrixScreenBounds { 1069, 145, 334, 324 };
+    static constexpr int lfoKnobSize = 61;
+    inline static const Rectangle<int> matrixScreenBounds = matrixPanel.reduced(15).withTop(145).withWidth(218);
+    inline static const Rectangle<int> matrixAmountBounds = Rectangle<int>(lfoKnobSize, lfoKnobSize).withCentre({
+        (matrixScreenBounds.getRight() + matrixPanel.getRight()) / 2, matrixScreenBounds.getY() + lfoKnobSize / 2 });
     inline static const Rectangle<int> performanceStatus { 117, 683, 267, 84 };
-    inline static const Rectangle<int> headerNotice { 839, 78, 554, 15 };
+    inline static const Rectangle<int> panicBounds { panelRight - 111, 44, 86, 30 };
+    inline static const Rectangle<int> headerNotice { 839, 78, panicBounds.getRight() - 839, 15 };
     inline static const std::array<const char*, 3> modeNames { "POLY", "MONO", "LEGATO" };
 
     static int oscillatorColumnX(int column) { return 218 + column * 72; }
@@ -746,7 +756,7 @@ private:
         button("OPEN", "Open patch file", { 839, 44, 65, 30 }, [this] { chooseFile(false); }, true);
         button("SAVE", "Save patch file", { 912, 44, 65, 30 }, [this] { chooseFile(true); }, true);
         audioButton = &button("AUDIO", "Select audio output", { 1004, 44, 75, 30 }, [this] { showOutputs(); }, true);
-        auto& panicButton = button("PANIC", "Stop all notes", { 1307, 44, 86, 30 }, [this]
+        auto& panicButton = button("PANIC", "Stop all notes", panicBounds, [this]
         {
             keys.release();
             audio.panic();
@@ -859,11 +869,11 @@ private:
         {
             const int dy = 184 * i;
             const String name = "LFO " + String(i + 1);
-            slider(name + " rate", "RATE", { 890, 190 + dy, 61, 61 }, false, 0.05, 20, 0.01,
+            slider(name + " rate", "RATE", { 890, 190 + dy, lfoKnobSize, lfoKnobSize }, false, 0.05, 20, 0.01,
                    [i](const Patch& p) { return p.lfos[i].rate; },
                    [i](Patch& p, double v) { p.lfos[i].rate = static_cast<float>(v); },
                    [](double v) { return String(v, 2) + " Hz"; }, 1.5);
-            slider(name + " depth", "DEPTH", { 967, 190 + dy, 61, 61 }, false, 0, 1, 0.001,
+            slider(name + " depth", "DEPTH", { 967, 190 + dy, lfoKnobSize, lfoKnobSize }, false, 0, 1, 0.001,
                    [i](const Patch& p) { return p.lfos[i].depth; },
                    [i](Patch& p, double v) { p.lfos[i].depth = static_cast<float>(v); }, percent);
             shapeButtons[i] = &button("SINE", name + " waveform", { 888, 291 + dy, 62, 27 }, [this, i]
@@ -885,14 +895,17 @@ private:
         matrixScreen.onClear = [this] { clearMatrixRoute(); };
         addAndMakeVisible(matrixScreen);
 
-        matrixAdd = &button("ADD ROUTE", "Add a modulation route", { 1069, 482, 92, 29 },
+        constexpr int buttonWidth = 78, buttonHeight = 29, buttonStep = buttonHeight + 8;
+        const Rectangle<int> addRouteBounds { matrixAmountBounds.getCentreX() - buttonWidth / 2,
+                                              matrixAmountBounds.getBottom() + 26, buttonWidth, buttonHeight };
+        matrixAdd = &button("ADD ROUTE", "Add a modulation route", addRouteBounds,
                             [this] { showMatrixAddMenu(); });
         matrixTarget = &button("TARGET", "Change the destination for all routes that use this target",
-                              { 1169, 482, 69, 29 }, [this] { showMatrixTargets(); });
-        matrixClear = &button("CLEAR", "Clear selected modulation route", { 1246, 482, 60, 29 },
+                              addRouteBounds.translated(0, buttonStep), [this] { showMatrixTargets(); });
+        matrixClear = &button("CLEAR", "Clear selected modulation route", addRouteBounds.translated(0, 2 * buttonStep),
                              [this] { clearMatrixRoute(); });
         const auto read = [this](const Patch& p) { return matrixSelection ? matrixAmount(p, *matrixSelection) : 0.0f; };
-        matrixAmountKnob = &slider("Modulation amount", {}, { 1352, 471, 48, 46 }, false, -1, 1, 0.01, read,
+        matrixAmountKnob = &slider("Modulation amount", {}, matrixAmountBounds, false, -1, 1, 0.01, read,
             [this](Patch& p, double value)
             {
                 if (!matrixSelection) return;
@@ -1055,7 +1068,7 @@ private:
         octaveDown = &button("-", "Lower keyboard octave", { 405, 723, 31, 29 }, [this] { changeOctave(-1); });
         octaveUp = &button("+", "Raise keyboard octave", { 451, 723, 31, 29 }, [this] { changeOctave(1); });
         addAndMakeVisible(keys);
-        keys.setBounds(502, 686, 894, 74);
+        keys.setBounds(502, 686, panelRight - panelInset - 502, 74);
     }
 
     void togglePerformance()
@@ -1215,7 +1228,7 @@ private:
 
     void timerCallback() override
     {
-        repaint(1100, 35, 185, 55);
+        repaint(1100, 35, 158, 55);
         repaint(keys.isVisible() ? performanceStatus : headerNotice);
     }
 
@@ -1236,7 +1249,7 @@ private:
 
     void paintHeader(Graphics& g) const
     {
-        const Rectangle<float> shell { 22, 19, 1396, 79 };
+        const Rectangle<float> shell { panelInset, 19, panelRight - panelInset, 79 };
         g.setColour(Colour(0x430a100d));
         g.fillRoundedRectangle(shell.translated(0, 2), 6.0f);
         g.setColour(dark);
@@ -1269,7 +1282,7 @@ private:
         {
             const bool lit = db > -54.0f + 4.5f * i;
             g.setColour(lit ? (i >= 11 ? amber : Colour(0xffa9b48c)) : Colour(0xff465044));
-            g.fillRoundedRectangle({ static_cast<float>(1102 + 13 * i), 61.0f, 9.0f, 9.0f }, 1.5f);
+            g.fillRoundedRectangle({ static_cast<float>(1102 + 12 * i), 61.0f, 9.0f, 9.0f }, 1.5f);
         }
     }
 
@@ -1376,7 +1389,7 @@ private:
 
     void paintPerformance(Graphics& g) const
     {
-        const Rectangle<float> area { 22, 666, 1396, 112 };
+        const Rectangle<float> area { panelInset, 666, panelRight - panelInset, 112 };
         g.setColour(Colour(0xffc4c1b6));
         g.fillRoundedRectangle(area, 6.0f);
         g.setColour(line.darker(0.1f));

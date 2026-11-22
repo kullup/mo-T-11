@@ -62,7 +62,7 @@ public:
     }
 
 private:
-    static constexpr int minWidth = 1080, maxWidth = 2400;
+    static constexpr int minWidth = mot::Panel::designWidth * 3 / 4, maxWidth = 2400;
 
     static int heightForWidth(int width, int designHeight)
     {

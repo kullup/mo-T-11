@@ -10,7 +10,7 @@ class Standalone;
 class Panel final : public juce::Component
 {
 public:
-    static constexpr int designWidth = 1440, designHeight = 800;
+    static constexpr int designWidth = 1408, designHeight = 800;
     Panel(Standalone& app, std::function<void(int)> onDesignHeightChanged);
     ~Panel() override;
     bool playComputerKey(const juce::KeyPress&);
