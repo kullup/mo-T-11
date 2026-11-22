@@ -20,6 +20,7 @@ using juce::String;
 const Colour chassis(0xffd7d4ca), plate(0xffe5e2d8), line(0xffa9a79d), ink(0xff282e2d);
 const Colour steel(0xfff5f2e8), quiet(0xff58605b), dark(0xff262c2b), bezel(0xff191c18);
 const Colour screen(0xff141812), amber(0xfff7b564), mark(0xffa84a25), blue(0xff326675);
+constexpr float displayTextScale = 1.3f;
 
 juce::Font panelFont(float size, bool bold = false)
 {
@@ -259,7 +260,7 @@ public:
         list.setTitle("Modulation routes");
         list.setDescription("Select a route with the arrow keys. Press Enter to focus Amount.");
         list.setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
-        list.setRowHeight(60);
+        list.setRowHeight(30);
         list.getViewport()->setScrollBarThickness(8);
         list.getVerticalScrollBar().setColour(juce::ScrollBar::thumbColourId, amber.withAlpha(0.62f));
         addAndMakeVisible(list);
@@ -307,10 +308,12 @@ private:
 
     void resized() override { list.setBounds(getLocalBounds().reduced(12)); }
 
-    static void centredPixels(Graphics& g, const String& text, int centre, float y, float scale, Colour colour)
+    static void centredPixels(Graphics& g, const String& text, int centreX, int centreY, Colour colour)
     {
-        const float width = (text.length() * 6 - 1) * scale;
-        pixels(g, text, std::round(centre - width * 0.5f), y, scale, colour);
+        const float width = (text.length() * 6 - 1) * displayTextScale;
+        const float height = 7.0f * displayTextScale;
+        pixels(g, text, std::round(centreX - width * 0.5f), std::round(centreY - height * 0.5f),
+               displayTextScale, colour);
     }
 
     void paint(Graphics& g) override
@@ -318,8 +321,8 @@ private:
         display(g, getLocalBounds(), Colour(0xff0d0d0a));
         if (rows.empty())
         {
-            centredPixels(g, "NO ROUTES", getWidth() / 2, 136.0f, 2.0f, amber);
-            centredPixels(g, "USE ADD ROUTE", getWidth() / 2, 161.0f, 1.0f, amber.withAlpha(0.65f));
+            centredPixels(g, "NO ROUTES", getWidth() / 2, getHeight() / 2 - 8, amber);
+            centredPixels(g, "USE ADD ROUTE", getWidth() / 2, getHeight() / 2 + 8, amber.withAlpha(0.65f));
         }
     }
 
@@ -349,12 +352,9 @@ private:
         g.drawVerticalLine(divider, 0.0f, static_cast<float>(height));
 
         const int centre = divider / 2;
-        centredPixels(g, sourceNames[route.source], centre, 8.0f, 2.0f, colour);
-        g.setColour(colour);
-        g.drawLine(centre - 5.0f, 28.0f, static_cast<float>(centre), 33.0f, 1.5f);
-        g.drawLine(static_cast<float>(centre), 33.0f, centre + 5.0f, 28.0f, 1.5f);
-        centredPixels(g, destinationNames[route.target], centre, 39.0f, 2.0f, colour);
-        centredPixels(g, matrixAmountText(amount), (divider + width) / 2, 22.0f, 2.4f, colour);
+        centredPixels(g, sourceNames[route.source], centre, height / 2 - 6, colour);
+        centredPixels(g, destinationNames[route.target], centre, height / 2 + 6, colour);
+        centredPixels(g, matrixAmountText(amount), (divider + width) / 2, height / 2, colour);
     }
 
     void selectedRowsChanged(int index) override
@@ -1322,7 +1322,7 @@ private:
         const auto x = static_cast<float>(area.getX() + 11), end = static_cast<float>(area.getRight() - 11);
         const auto top = static_cast<float>(area.getY());
         pixels(g, "OSC " + String(oscillatorNames[row]), x, top + 11, 1, amber.withAlpha(row == engine ? 1.0f : 0.65f));
-        pixels(g, tableNames[osc.table], x, top + 26, 1.3f, amber);
+        pixels(g, tableNames[osc.table], x, top + 26, displayTextScale, amber);
         g.setColour(amber.withAlpha(0.7f));
         g.drawLine(end - 7, top + 13, end - 3, top + 17, 1.2f);
         g.drawLine(end - 3, top + 17, end + 1, top + 13, 1.2f);
