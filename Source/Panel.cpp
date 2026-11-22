@@ -843,9 +843,7 @@ private:
         const auto read = [this](const Patch& p) { return p.matrix[matrixRow][matrixCol]; };
         const auto write = [this](Patch& p, double v) { p.matrix[matrixRow][matrixCol] = static_cast<float>(v); };
         const auto format = [](double v) { return signedValue(juce::roundToInt(v * 100), "%"); };
-        auto& fine = slider("Matrix fine amount", "FINE", { 1349, 244, 54, 54 }, false, -1, 1, 0.01, read, write, format);
-        fine.setMouseDragSensitivity(710);
-        slider("Matrix amount fader", {}, { 1359, 338, 34, 144 }, true, -1, 1, 0.01, read, write, format);
+        slider("Matrix amount fader", {}, { 1359, 267, 34, 215 }, true, -1, 1, 0.01, read, write, format);
         button("CLEAR", "Clear selected matrix route", { 1347, 493, 56, 26 }, [this, write]
         {
             edit([&](Patch& p) { write(p, 0.0); });
@@ -1261,7 +1259,7 @@ private:
         for (int i = 0; i < sourceCount; ++i)
             label(g, String(sourceNames[i]).toUpperCase(), { 1069, 248 + i * 32, 68, 23 }, 12.5f,
                   i == matrixRow ? mark : quiet, juce::Justification::centredLeft, i == matrixRow);
-        label(g, "AMOUNT", { 1341, 324, 68, 15 }, 10.5f, quiet, juce::Justification::centred, true);
+        label(g, "AMOUNT", { 1341, 248, 68, 15 }, 10.5f, quiet, juce::Justification::centred, true);
     }
 
     void paintPerformance(Graphics& g) const

@@ -18,7 +18,7 @@ MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, three osc
 - **Filter and envelopes.** Click the filter mode to cycle low-pass, band-pass, and high-pass. Use cutoff, resonance, and drive to shape the signal. The amp ADSR controls the voice’s gain. Route **Filter Env** to **Cutoff** for a filter sweep, or to another destination for a different contour.
 - **LFOs.** Set rate and depth, then cycle sine, triangle, ramp, and square. **Free** runs continuously. **Key** starts a separate cycle for each played note.
 - **Matrix.** Click a target in the display to reassign its column. Each column keeps its route amounts when reassigned, and each target can occupy one column. Available targets include oscillator position, pitch, level and pan, plus filter cutoff, resonance and drive, overall pan, and per-voice amp gain. Patches save the target assignments and route amounts together.
-- Press a cell to select its route. Move the **Amount** fader for a direct setting or drag **Fine** for small adjustments. Amber indicates positive depth and blue indicates negative depth. **Clear** zeros the selected route. At full depth, pitch moves up to an octave, cutoff up to four octaves, and amp gain from silence to twice the voice level, depending on polarity.
+- Press a cell to select its route. Move the **Amount** fader to set its depth. Amber indicates positive depth and blue indicates negative depth. **Clear** zeros the selected route. At full depth, pitch moves up to an octave, cutoff up to four octaves, and amp gain from silence to twice the voice level, depending on polarity.
 
 ## Build and test
 
