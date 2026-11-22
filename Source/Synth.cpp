@@ -273,9 +273,9 @@ void Synth::setPatch(const Patch& newPatch) noexcept
     }
     routeCount = 0;
     for (int from = 0; from < sourceCount; ++from)
-        for (int to = 0; to < destinationCount; ++to)
-            if (patch.matrix[from][to] != 0.0f)
-                routes[routeCount++] = { from, to, patch.matrix[from][to] };
+        for (int col = 0; col < matrixColumnCount; ++col)
+            if (patch.matrix[from][col] != 0.0f)
+                routes[routeCount++] = { from, patch.matrixTargets[col], patch.matrix[from][col] };
     changeVoiceMode(previousMode);
     if (patch.voicing.glide <= 0.0f)
         for (auto& v : voices)
@@ -563,8 +563,8 @@ void Synth::updateVoice(Voice& v) noexcept
         v.targetTuning[i] = std::exp2(tune / 12.0f);
         v.targetPosition[i] = unit(osc.position + mod[positionDestinations[i]]);
         const int count = patch.voicing.unison;
-        const float centre = bipolar(osc.pan + mod[pan]);
-        const float level = osc.level / count;
+        const float centre = bipolar(osc.pan + mod[pan] + mod[panDestinations[i]]);
+        const float level = unit(osc.level + mod[levelDestinations[i]]) / count;
         for (int index = 0; index < maxUnison; ++index)
         {
             auto& layer = v.layers[i][index];
@@ -597,12 +597,16 @@ void Synth::updateVoice(Voice& v) noexcept
     const float hz = std::clamp(patch.cutoff * std::exp2(4.0f * bipolar(mod[cutoff])), 15.0f, rate * 0.43f);
     v.targetG = std::tan(pi * hz * seconds);
     v.targetDamping = lerp(1.75f, 0.21f, unit(patch.resonance + mod[resonance]));
+    v.targetDriveMod = bipolar(mod[filterDrive]);
+    v.targetAmpGain = 1.0f + bipolar(mod[ampGain]);
     if (v.fresh)
     {
         v.tuning = v.targetTuning;
         v.position = v.targetPosition;
         v.g = v.targetG;
         v.damping = v.targetDamping;
+        v.driveMod = v.targetDriveMod;
+        v.ampGain = v.targetAmpGain;
         v.fresh = false;
     }
 }
@@ -678,12 +682,15 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
             const float a1 = 1.0f / (1.0f + v.g * (v.g + v.damping));
             const float a2 = v.g * a1;
             const float a3 = v.g * a2;
+            v.driveMod = lerp(v.driveMod, v.targetDriveMod, smoothing);
+            const float voiceDrive = unit(drive + v.driveMod);
             const auto saturate = [&](float value)
             {
-                return lerp(value, std::tanh(value * (1.0f + 6.0f * drive)), drive);
+                return lerp(value, std::tanh(value * (1.0f + 6.0f * voiceDrive)), voiceDrive);
             };
             v.velocityGain = lerp(v.velocityGain, v.velocity, smoothing);
-            const float amplitude = amp * v.velocityGain * 0.23f;
+            v.ampGain = lerp(v.ampGain, v.targetAmpGain, smoothing);
+            const float amplitude = amp * v.velocityGain * v.ampGain * 0.23f;
             v.lastL = v.filters[0].tick(saturate(voiceL), a1, a2, a3, v.damping, patch.filterMode) * amplitude;
             v.lastR = v.filters[1].tick(saturate(voiceR), a1, a2, a3, v.damping, patch.filterMode) * amplitude;
             mixL += v.lastL;

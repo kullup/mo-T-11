@@ -92,11 +92,12 @@ private:
         std::array<int, oscillatorCount> table {}, previousTable {};
         std::array<float, oscillatorCount> tableMix {};
         float g = 0, damping = 0, targetG = 0, targetDamping = 0;
+        float driveMod = 0, targetDriveMod = 0, ampGain = 1, targetAmpGain = 1;
         float lastL = 0, lastR = 0;
     };
 
     struct HeldNote { Event on; bool held; };
-    struct Route { int source, target; float amount; };
+    struct Route { int source; Destination target; float amount; };
     void event(const Event&) noexcept;
     void trackNotes(const Event&) noexcept;
     const HeldNote* monoNote() const noexcept;
@@ -114,7 +115,7 @@ private:
     std::array<Voice, polyphony> voices {};
     std::array<HeldNote, 256> heldNotes {};
     std::size_t heldCount = 0;
-    std::array<Route, sourceCount * destinationCount> routes {};
+    std::array<Route, sourceCount * matrixColumnCount> routes {};
     std::size_t routeCount = 0;
     std::array<float, maxUnison> unisonPan {}, unisonRatio { 1.0f };
     std::array<float, 2> globalPhases {};

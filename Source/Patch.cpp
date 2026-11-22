@@ -11,9 +11,11 @@ namespace mot
 namespace
 {
 constexpr std::array<const char*, oscillatorCount> oscillatorTags { "OSC_A", "OSC_B", "OSC_C" };
-constexpr int patchVersion = 4;
+constexpr int patchVersion = 5;
 constexpr int macroBranchVersion = 3;
+constexpr int thirdOscillatorVersion = 4;
 constexpr int legacyOscillatorCount = 2, legacyDestinationCount = 7;
+constexpr int fixedMatrixDestinationCount = 9;
 }
 
 const std::array<NamedPatch, presetCount>& factoryPresets()
@@ -29,8 +31,8 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         bass.cutoff = 320; bass.resonance = 0.31f; bass.drive = 0.35f;
         bass.ampEnv = { 0.004f, 0.22f, 0.58f, 0.10f };
         bass.filterEnv = { 0.004f, 0.15f, 0.04f, 0.18f };
-        bass.matrix[filterEnvelope][cutoff] = 0.66f;
-        bass.matrix[velocity][cutoff] = 0.21f;
+        bass.matrix[filterEnvelope][defaultMatrixColumn(cutoff)] = 0.66f;
+        bass.matrix[velocity][defaultMatrixColumn(cutoff)] = 0.21f;
         bank[1] = { "Low Circuit", bass };
 
         Patch pad;
@@ -39,9 +41,9 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         pad.cutoff = 4200; pad.resonance = 0.23f;
         pad.ampEnv = { 0.52f, 0.87f, 0.73f, 1.34f };
         pad.lfos[0].rate = 0.25f;
-        pad.matrix[lfo1][positionA] = 0.24f;
-        pad.matrix[lfo2][positionB] = -0.22f;
-        pad.matrix[lfo2][pan] = 0.26f;
+        pad.matrix[lfo1][defaultMatrixColumn(positionA)] = 0.24f;
+        pad.matrix[lfo2][defaultMatrixColumn(positionB)] = -0.22f;
+        pad.matrix[lfo2][defaultMatrixColumn(pan)] = 0.26f;
         bank[2] = { "Glass Current", pad };
 
         Patch pluck;
@@ -50,9 +52,9 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         pluck.cutoff = 1250; pluck.resonance = 0.28f;
         pluck.ampEnv = { 0.003f, 0.32f, 0.06f, 0.33f };
         pluck.filterEnv = { 0.003f, 0.14f, 0.0f, 0.23f };
-        pluck.matrix[filterEnvelope][cutoff] = 0.55f;
-        pluck.matrix[ampEnvelope][positionB] = 0.25f;
-        pluck.matrix[keyTrack][cutoff] = 0.33f;
+        pluck.matrix[filterEnvelope][defaultMatrixColumn(cutoff)] = 0.55f;
+        pluck.matrix[ampEnvelope][defaultMatrixColumn(positionB)] = 0.25f;
+        pluck.matrix[keyTrack][defaultMatrixColumn(cutoff)] = 0.33f;
         bank[3] = { "Copper Pluck", pluck };
 
         Patch lead;
@@ -61,10 +63,10 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         lead.cutoff = 3450; lead.resonance = 0.28f; lead.drive = 0.26f;
         lead.ampEnv = { 0.012f, 0.19f, 0.68f, 0.16f };
         lead.lfos[0] = { 5.8f, 1.0f, Shape::sine, true };
-        lead.matrix[lfo1][pitchA] = 0.014f;
-        lead.matrix[lfo1][pitchB] = 0.014f;
-        lead.matrix[wheel][positionA] = 0.45f;
-        lead.matrix[pressure][cutoff] = 0.43f;
+        lead.matrix[lfo1][defaultMatrixColumn(pitchA)] = 0.014f;
+        lead.matrix[lfo1][defaultMatrixColumn(pitchB)] = 0.014f;
+        lead.matrix[wheel][defaultMatrixColumn(positionA)] = 0.45f;
+        lead.matrix[pressure][defaultMatrixColumn(cutoff)] = 0.43f;
         bank[4] = { "Pulse Driver", lead };
 
         Patch organ;
@@ -72,8 +74,8 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         organ.osc[1] = { 3, 0.25f, 0.4f, 0, 7, 1.0f, 0.24f };
         organ.cutoff = 5300; organ.filterMode = FilterMode::bandPass;
         organ.ampEnv = { 0.025f, 0.14f, 0.86f, 0.30f };
-        organ.matrix[lfo2][cutoff] = 0.23f;
-        organ.matrix[lfo2][pan] = -0.32f;
+        organ.matrix[lfo2][defaultMatrixColumn(cutoff)] = 0.23f;
+        organ.matrix[lfo2][defaultMatrixColumn(pan)] = -0.32f;
         bank[5] = { "Hollow Choir", organ };
 
         Patch scan;
@@ -82,9 +84,9 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         scan.cutoff = 3150; scan.resonance = 0.36f;
         scan.ampEnv = { 0.04f, 0.48f, 0.75f, 0.34f };
         scan.lfos[0] = { 3.4f, 0.90f, Shape::ramp, true };
-        scan.matrix[lfo1][positionA] = 0.47f;
-        scan.matrix[lfo1][positionB] = -0.47f;
-        scan.matrix[lfo1][cutoff] = 0.33f;
+        scan.matrix[lfo1][defaultMatrixColumn(positionA)] = 0.47f;
+        scan.matrix[lfo1][defaultMatrixColumn(positionB)] = -0.47f;
+        scan.matrix[lfo1][defaultMatrixColumn(cutoff)] = 0.33f;
         bank[6] = { "Vector Scan", scan };
 
         Patch keys;
@@ -93,9 +95,9 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         keys.cutoff = 5600; keys.resonance = 0.19f;
         keys.ampEnv = { 0.01f, 0.65f, 0.35f, 0.48f };
         keys.filterEnv = { 0.006f, 0.23f, 0.0f, 0.3f };
-        keys.matrix[filterEnvelope][positionB] = 0.48f;
-        keys.matrix[velocity][cutoff] = 0.22f;
-        keys.matrix[lfo2][pitchB] = 0.012f;
+        keys.matrix[filterEnvelope][defaultMatrixColumn(positionB)] = 0.48f;
+        keys.matrix[velocity][defaultMatrixColumn(cutoff)] = 0.22f;
+        keys.matrix[lfo2][defaultMatrixColumn(pitchB)] = 0.012f;
         bank[7] = { "Night Keys", keys };
 
         Patch analog;
@@ -105,7 +107,7 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         analog.cutoff = 1600; analog.resonance = 0.28f; analog.drive = 0.12f;
         analog.ampEnv = { 0.012f, 0.31f, 0.72f, 0.24f };
         analog.filterEnv = { 0.006f, 0.36f, 0.13f, 0.25f };
-        analog.matrix[filterEnvelope][cutoff] = 0.58f;
+        analog.matrix[filterEnvelope][defaultMatrixColumn(cutoff)] = 0.58f;
         bank[8] = { "Analog Stack", analog };
         return bank;
     }();
@@ -142,7 +144,10 @@ std::string encodePatch(const NamedPatch& named)
     }
     const auto& v = p.voicing;
     out << "VOICING " << static_cast<int>(v.mode) << ' ' << v.glide << ' ' << v.unison
-        << ' ' << v.detune << ' ' << v.width << "\nMATRIX\n";
+        << ' ' << v.detune << ' ' << v.width << "\nTARGETS";
+    for (auto target : p.matrixTargets)
+        out << ' ' << static_cast<int>(target);
+    out << "\nMATRIX\n";
     for (const auto& row : p.matrix)
     {
         for (auto value : row)
@@ -177,7 +182,7 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
         return std::nullopt;
 
     auto& p = named.sound;
-    const bool legacy = version < patchVersion;
+    const bool legacy = version < thirdOscillatorVersion;
     const int oscillatorSlots = legacy ? legacyOscillatorCount : oscillatorCount;
     const int lastTable = legacy ? static_cast<int>(glassFormants) : tableCount - 1;
     for (int i = 0; i < oscillatorSlots; ++i)
@@ -224,13 +229,37 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
             return std::nullopt;
         v.mode = static_cast<PlayMode>(playMode);
     }
+    const bool assignableMatrix = version >= 5;
+    if (assignableMatrix)
+    {
+        if (!readTag("TARGETS"))
+            return std::nullopt;
+        std::array<bool, destinationCount> assigned {};
+        for (auto& target : p.matrixTargets)
+        {
+            int id = 0;
+            if (!readRange(id, 0, destinationCount - 1) || assigned[id])
+                return std::nullopt;
+            target = static_cast<Destination>(id);
+            assigned[id] = true;
+        }
+    }
     if (!readTag("MATRIX"))
         return std::nullopt;
-    const int routesPerSource = legacy ? legacyDestinationCount : static_cast<int>(destinationCount);
+    const int routesPerSource = legacy ? legacyDestinationCount : fixedMatrixDestinationCount;
     for (auto& row : p.matrix)
+    {
+        if (assignableMatrix)
+        {
+            for (auto& amount : row)
+                if (!readRange(amount, -1, 1))
+                    return std::nullopt;
+            continue;
+        }
         for (int i = 0; i < routesPerSource; ++i)
-            if (!readRange(row[i], -1, 1))
+            if (!readRange(row[defaultMatrixColumn(static_cast<Destination>(i))], -1, 1))
                 return std::nullopt;
+    }
     in >> std::ws;
     return in.eof() ? std::optional { named } : std::nullopt;
 }

@@ -9,13 +9,19 @@ namespace mot
 {
 constexpr int oscillatorCount = 3;
 constexpr int sourceCount = 8;
+constexpr int matrixColumnCount = 9;
 constexpr int presetCount = 9;
 constexpr int maxUnison = 4;
 constexpr int maxOscillatorSemitones = 24;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 
 enum Source { lfo1, lfo2, filterEnvelope, ampEnvelope, velocity, keyTrack, wheel, pressure };
-enum Destination { positionA, positionB, pitchA, pitchB, cutoff, resonance, pan, positionC, pitchC, destinationCount };
+// Destination values are stored in patch files. Append new destinations before destinationCount.
+enum Destination
+{
+    positionA, positionB, pitchA, pitchB, cutoff, resonance, pan, positionC, pitchC,
+    levelA, levelB, levelC, panA, panB, panC, filterDrive, ampGain, destinationCount
+};
 enum Wavetable
 {
     basicShapes, pulseWidth, hollowBody, harmonicLadder, foldedSine, glassFormants,
@@ -33,11 +39,24 @@ inline constexpr bool isFixedTable(int table) noexcept { return table >= sineTab
 inline constexpr float pulseDuty(float position) noexcept { return 0.05f + 0.90f * position; }
 inline constexpr std::array<Destination, oscillatorCount> positionDestinations { positionA, positionB, positionC };
 inline constexpr std::array<Destination, oscillatorCount> pitchDestinations { pitchA, pitchB, pitchC };
+inline constexpr std::array<Destination, oscillatorCount> levelDestinations { levelA, levelB, levelC };
+inline constexpr std::array<Destination, oscillatorCount> panDestinations { panA, panB, panC };
+inline constexpr std::array<Destination, matrixColumnCount> defaultMatrixTargets {
+    positionA, positionB, positionC, pitchA, pitchB, pitchC, cutoff, resonance, pan
+};
+inline constexpr int defaultMatrixColumn(Destination target) noexcept
+{
+    for (int col = 0; col < matrixColumnCount; ++col)
+        if (defaultMatrixTargets[col] == target)
+            return col;
+    return -1;
+}
 inline constexpr std::array<const char*, sourceCount> sourceNames {
     "LFO 1", "LFO 2", "Filter Env", "Amp Env", "Velocity", "Key Track", "Mod Wheel", "Pressure"
 };
 inline constexpr std::array<const char*, destinationCount> destinationNames {
-    "Pos A", "Pos B", "Pitch A", "Pitch B", "Cutoff", "Reso", "Pan", "Pos C", "Pitch C"
+    "Pos A", "Pos B", "Pitch A", "Pitch B", "Cutoff", "Reso", "Pan", "Pos C", "Pitch C",
+    "Level A", "Level B", "Level C", "Pan A", "Pan B", "Pan C", "Drive", "Amp Gain"
 };
 
 struct Oscillator
@@ -76,7 +95,8 @@ struct Patch
     Envelope filterEnv { 0.015f, 0.28f, 0.20f, 0.25f };
     Envelope ampEnv { 0.008f, 0.24f, 0.80f, 0.20f };
     std::array<Lfo, 2> lfos { Lfo {}, Lfo { 0.37f, 1.0f, Shape::triangle, false } };
-    std::array<std::array<float, destinationCount>, sourceCount> matrix {};
+    std::array<Destination, matrixColumnCount> matrixTargets = defaultMatrixTargets;
+    std::array<std::array<float, matrixColumnCount>, sourceCount> matrix {};
     Voicing voicing;
 };
 
