@@ -529,7 +529,6 @@ public:
         : audio(instrument), designHeightChanged(std::move(onDesignHeightChanged)), keys(audio)
     {
         setLookAndFeel(&skin);
-        setSize(designWidth, designHeight);
         createHeader();
         createOscillators();
         createFilter();
@@ -538,6 +537,7 @@ public:
         createMatrix();
         createVoicing();
         createKeyboard();
+        setPerformanceVisible(false);
         syncControls();
 
         const auto& presets = factoryPresets();
@@ -613,7 +613,6 @@ private:
     inline static const Rectangle<int> matrixPanel { 1054, 111, panelRight - 1054, 425 };
     inline static const Rectangle<int> voicingPanel { panelInset, 550, 623, 104 };
     inline static const Rectangle<int> effectsPanel { 655, 550, panelRight - 655, 104 };
-    inline static const int compactHeight = 676;
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
     inline static const std::array<const char*, oscillatorCount> oscillatorNames { "A", "B", "C" };
     enum OscillatorColumn { positionColumn, tuneColumn, fineColumn, volumeColumn };
@@ -746,8 +745,11 @@ private:
 
     void createHeader()
     {
-        performanceButton = &button("HIDE KEYS", "Hide performance panel", { 330, 44, 102, 30 },
-                                    [this] { togglePerformance(); }, true);
+        performanceButton = &button({}, {}, { 330, 44, 102, 30 }, [this]
+        {
+            setPerformanceVisible(!keys.isVisible());
+            designHeightChanged(getHeight());
+        }, true);
         button("<", "Previous factory patch", { 448, 44, 36, 30 }, [this] { stepPreset(-1); }, true);
         button(">", "Next factory patch", { 778, 44, 36, 30 }, [this] { stepPreset(1); }, true);
         auto& presets = button({}, "Factory presets", patchDisplay, [this] { showPresets(); }, true);
@@ -1067,13 +1069,12 @@ private:
                                [](Patch& p, double v) { p.volume = static_cast<float>(v); }, percent);
         octaveDown = &button("-", "Lower keyboard octave", { 405, 723, 31, 29 }, [this] { changeOctave(-1); });
         octaveUp = &button("+", "Raise keyboard octave", { 451, 723, 31, 29 }, [this] { changeOctave(1); });
-        addAndMakeVisible(keys);
+        addChildComponent(keys);
         keys.setBounds(502, 686, panelRight - panelInset - 502, 74);
     }
 
-    void togglePerformance()
+    void setPerformanceVisible(bool show)
     {
-        const bool show = !keys.isVisible();
         keys.setVisible(show);
         masterVolume->setVisible(show);
         octaveDown->setVisible(show);
@@ -1083,7 +1084,6 @@ private:
         performanceButton->setTitle(action);
         performanceButton->setTooltip(action);
         setSize(designWidth, show ? designHeight : compactHeight);
-        designHeightChanged(getHeight());
     }
 
     void changeOctave(int step)
@@ -1453,7 +1453,7 @@ Panel::Panel(Standalone& audio, std::function<void(int)> onDesignHeightChanged)
       }))
 {
     addAndMakeVisible(*surface);
-    setSize(designWidth, designHeight);
+    setSize(designWidth, surface->getHeight());
 }
 
 Panel::~Panel() = default;

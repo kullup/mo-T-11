@@ -12,7 +12,7 @@ public:
         setUsingNativeTitleBar(true);
         setContentOwned(new mot::Panel(audio, [this](int height) { updatePanelHeight(height); }), true);
         setResizable(true, false);
-        setPanelAspectRatio(mot::Panel::designHeight);
+        setPanelAspectRatio(mot::Panel::compactHeight);
         grip = std::make_unique<juce::ResizableCornerComponent>(this, getConstrainer());
         grip->setAlwaysOnTop(true);
         addAndMakeVisible(*grip);
@@ -20,8 +20,8 @@ public:
         int width = mot::Panel::designWidth;
         if (display != nullptr)
             width = juce::jmax(minWidth, juce::jmin(width, display->userArea.getWidth() - 60,
-                (display->userArea.getHeight() - 90) * mot::Panel::designWidth / mot::Panel::designHeight));
-        centreWithSize(width, heightForWidth(width, mot::Panel::designHeight));
+                (display->userArea.getHeight() - 90) * mot::Panel::designWidth / mot::Panel::compactHeight));
+        centreWithSize(width, heightForWidth(width, mot::Panel::compactHeight));
         setVisible(true);
     }
 
