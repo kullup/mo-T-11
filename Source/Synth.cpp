@@ -16,47 +16,58 @@ float bipolar(float x) noexcept { return std::clamp(x, -1.0f, 1.0f); }
 
 struct Harmonic { float sine, cosine; };
 
+int storedFrames(int table) noexcept
+{
+    if (table == pulseTable) return 0;
+    return isFixedTable(table) ? 1 : WaveBank::frames;
+}
+
 Harmonic spectrum(int table, int harmonic, float position)
 {
     const auto h = static_cast<float>(harmonic);
     const auto odd = harmonic % 2 != 0;
     const auto fundamental = harmonic == 1 ? 1.0f : 0.0f;
+    const float triangle = odd ? ((harmonic % 4 == 1 ? 1.0f : -1.0f) / (h * h)) : 0.0f;
+    const float saw = (odd ? 1.0f : -1.0f) * 0.80f / h;
+    const float square = odd ? 0.88f / h : 0.0f;
     switch (table)
     {
-        case 0:
+        case basicShapes:
         {
-            const float triangle = odd ? ((harmonic % 4 == 1 ? 1.0f : -1.0f) / (h * h)) : 0.0f;
-            const float saw = (odd ? 1.0f : -1.0f) * 0.80f / h;
-            const float square = odd ? 0.88f / h : 0.0f;
             const float segment = position * 3.0f;
             return { segment < 1 ? lerp(fundamental, triangle, segment)
                                  : segment < 2 ? lerp(triangle, saw, segment - 1)
                                                : lerp(saw, square, segment - 2), 0.0f };
         }
-        case 1:
+        case pulseWidth:
         {
             const float width = lerp(0.50f, 0.07f, position);
             return { 2.0f * std::sin(pi * h * width) / (pi * h), 0.0f };
         }
-        case 2:
+        case hollowBody:
             return { fundamental * 0.56f + (odd ? 0.65f * std::sin(h * lerp(0.38f, 1.3f, position))
                                                        / std::pow(h, lerp(1.9f, 0.83f, position)) : 0.0f), 0.0f };
-        case 3:
+        case harmonicLadder:
             return { h <= 16.0f ? std::exp(-0.36f * std::abs(h - lerp(1.0f, 12.0f, position)))
                                      / std::sqrt(h) + fundamental * 0.24f : 0.0f, 0.0f };
-        case 4:
+        case foldedSine:
         {
             const float band = (h - lerp(1.0f, 15.0f, position)) / lerp(1.0f, 6.7f, position);
             return { odd ? (harmonic % 4 == 1 ? 1.0f : -1.0f) * std::exp(-band * band) / std::sqrt(h)
                                + fundamental * 0.20f : 0.0f, 0.0f };
         }
-        default:
+        case glassFormants:
         {
             const float first = (h - lerp(2.1f, 11.0f, position)) / 1.8f;
             const float second = (h - lerp(13.0f, 29.0f, position)) / 3.1f;
             const float peak = (std::exp(-first * first) + 0.58f * std::exp(-second * second)) / std::sqrt(h);
             return { 0.31f * fundamental + peak * std::cos(1.17f * h), peak * std::sin(1.17f * h) };
         }
+        case sineTable:     return { fundamental, 0.0f };
+        case triangleTable: return { triangle, 0.0f };
+        case sawTable:      return { saw, 0.0f };
+        case squareTable:   return { square, 0.0f };
+        default: return {};
     }
 }
 
@@ -73,8 +84,16 @@ float lfoSample(Shape shape, float phase) noexcept
 }
 }
 
-WaveBank::WaveBank() : data(tableCount * frames * bands * (samples + 1))
+WaveBank::WaveBank()
 {
+    int offset = 0;
+    for (int table = 0; table < tableCount; ++table)
+    {
+        tableOffsets[table] = offset;
+        offset += storedFrames(table) * frameStride;
+    }
+    data.resize(offset);
+
     std::array<float, samples> sine {}, cosine {};
     for (int i = 0; i < samples; ++i)
     {
@@ -84,7 +103,7 @@ WaveBank::WaveBank() : data(tableCount * frames * bands * (samples + 1))
     }
 
     for (int table = 0; table < tableCount; ++table)
-        for (int index = 0; index < frames; ++index)
+        for (int index = 0, count = storedFrames(table); index < count; ++index)
         {
             std::array<float, samples> sum {};
             int added = 0;
@@ -104,26 +123,45 @@ WaveBank::WaveBank() : data(tableCount * frames * bands * (samples + 1))
                     }
                 }
                 added = limit;
-                auto* target = data.data() + ((table * frames + index) * bands + band) * (samples + 1);
+                auto* target = data.data() + tableOffsets[table] + index * frameStride + band * (samples + 1);
                 std::copy(sum.begin(), sum.end(), target);
                 target[samples] = target[0];
                 for (float value : sum)
                     peak = std::max(peak, std::abs(value));
             }
             const float scale = 0.92f / std::max(peak, 0.01f);
-            auto* begin = data.data() + (table * frames + index) * bands * (samples + 1);
-            for (auto* value = begin; value != begin + bands * (samples + 1); ++value)
+            auto* begin = data.data() + tableOffsets[table] + index * frameStride;
+            for (auto* value = begin; value != begin + frameStride; ++value)
                 *value *= scale;
         }
 }
 
 const float* WaveBank::frame(int table, int index, int band) const noexcept
 {
-    return data.data() + ((table * frames + index) * bands + band) * (samples + 1);
+    return data.data() + tableOffsets[table] + index * frameStride + band * (samples + 1);
+}
+
+float WaveBank::interpolateFixed(int table, float phase, int band) const noexcept
+{
+    const float p = (phase - std::floor(phase)) * samples;
+    const int sample = std::min(static_cast<int>(p), samples - 1);
+    const auto* values = frame(table, 0, band);
+    return lerp(values[sample], values[sample + 1], p - sample);
 }
 
 float WaveBank::interpolate(int table, float position, float phase, int band) const noexcept
 {
+    if (isFixedTable(table))
+        return interpolateFixed(table, phase, band);
+    if (table == pulseTable)
+    {
+        // Two band-limited saws cancel the ramp and move one edge continuously with duty.
+        const float duty = pulseDuty(unit(position));
+        const float edge = phase + 0.5f;
+        const float high = interpolateFixed(sawTable, edge - duty, band);
+        const float low = interpolateFixed(sawTable, edge, band);
+        return (high - low) * (0.5f / std::max(duty, 1.0f - duty));
+    }
     const float i = unit(position) * (frames - 1);
     const int index = std::min(static_cast<int>(i), frames - 2);
     const float p = (phase - std::floor(phase)) * samples;
@@ -330,6 +368,7 @@ void Synth::trigger(Voice& v, const Event& e, double glideFrom) noexcept
                                                      : static_cast<float>(layerSeed >> 8) / 16777216.0f;
         }
         v.table[i] = v.previousTable[i] = osc.table;
+        v.tableMix[i] = 1.0f;
     }
 }
 
@@ -516,13 +555,13 @@ void Synth::updateVoice(Voice& v) noexcept
         mod[route.target] += values[route.source] * route.amount;
     }
 
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < oscillatorCount; ++i)
     {
         const auto& osc = patch.osc[i];
         const float tune = 12.0f * osc.octave + osc.semitone + osc.fine * 0.01f
-                           + 2.0f * v.controls.bend + 12.0f * bipolar(mod[pitchA + i]);
+                           + 2.0f * v.controls.bend + 12.0f * bipolar(mod[pitchDestinations[i]]);
         v.targetTuning[i] = std::exp2(tune / 12.0f);
-        v.targetPosition[i] = unit(osc.position + mod[positionA + i]);
+        v.targetPosition[i] = unit(osc.position + mod[positionDestinations[i]]);
         const int count = patch.voicing.unison;
         const float centre = bipolar(osc.pan + mod[pan]);
         const float level = osc.level / count;
@@ -605,7 +644,7 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
                 advance(v.lfoPhases[i], patch.lfos[i].rate * seconds);
 
             float voiceL = 0.0f, voiceR = 0.0f;
-            for (int i = 0; i < 2; ++i)
+            for (int i = 0; i < oscillatorCount; ++i)
             {
                 v.tuning[i] = lerp(v.tuning[i], v.targetTuning[i], smoothing);
                 v.position[i] = lerp(v.position[i], v.targetPosition[i], smoothing);

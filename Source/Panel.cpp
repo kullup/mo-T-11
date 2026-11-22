@@ -1,5 +1,6 @@
 #include "Panel.h"
 #include "Standalone.h"
+#include <BinaryData.h>
 
 #include <algorithm>
 #include <cmath>
@@ -19,15 +20,25 @@ const Colour chassis(0xffd7d4ca), plate(0xffe5e2d8), line(0xffa9a79d), ink(0xff2
 const Colour steel(0xfff5f2e8), quiet(0xff58605b), dark(0xff262c2b), bezel(0xff191c18);
 const Colour screen(0xff141812), amber(0xfff7b564), mark(0xffa84a25), blue(0xff326675);
 
+juce::Font panelFont(float size, bool bold = false)
+{
+    static const auto medium = juce::Typeface::createSystemTypefaceFor(
+        BinaryData::BarlowSemiCondensedMedium_ttf, BinaryData::BarlowSemiCondensedMedium_ttfSize);
+    static const auto boldFace = juce::Typeface::createSystemTypefaceFor(
+        BinaryData::BarlowSemiCondensedBold_ttf, BinaryData::BarlowSemiCondensedBold_ttfSize);
+    return juce::Font(juce::FontOptions(bold ? boldFace : medium).withHeight(size)
+                          .withKerningFactor(bold ? 0.055f : 0.015f));
+}
+
 void label(Graphics& g, const String& text, Rectangle<int> area, float size, Colour colour = ink,
            juce::Justification justify = juce::Justification::centredLeft, bool bold = false)
 {
     g.setColour(colour);
-    g.setFont(juce::FontOptions(size, bold ? juce::Font::bold : juce::Font::plain));
+    g.setFont(panelFont(size, bold));
     g.drawFittedText(text, area, justify, 1, 0.72f);
 }
 
-void pixels(Graphics& g, const String& source, int x, int y, int scale, Colour colour)
+void pixels(Graphics& g, const String& source, float x, float y, float scale, Colour colour)
 {
     static constexpr std::string_view chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-%.> /?*";
     static constexpr unsigned char glyphs[][7] {
@@ -95,6 +106,8 @@ String seconds(double value)
 class Skin final : public juce::LookAndFeel_V4
 {
 public:
+    juce::Font getPopupMenuFont() override { return panelFont(17.0f); }
+
     void drawRotarySlider(Graphics& g, int x, int y, int w, int h, float position,
                           float start, float end, juce::Slider& slider) override
     {
@@ -123,7 +136,7 @@ public:
         g.setColour(slider.isMouseOverOrDragging() || slider.hasKeyboardFocus(true) ? blue : quiet.withAlpha(0.22f));
         g.drawEllipse(bounds, slider.hasKeyboardFocus(true) ? 1.65f : 1.0f);
         const float angle = start + position * (end - start);
-        g.setColour(mark);
+        g.setColour(slider.isEnabled() ? mark : quiet.withAlpha(0.48f));
         g.drawLine({ radialPoint(angle, diameter * 0.14f), radialPoint(angle, diameter * 0.39f) }, diameter > 70 ? 3.3f : 2.35f);
         g.fillEllipse(Rectangle<float>(3.0f, 3.0f).withCentre(centre));
     }
@@ -274,6 +287,7 @@ public:
     void mouseDown(const juce::MouseEvent& e) override { grabKeyboardFocus(); holdMouse(noteAt(e.position)); }
     void mouseDrag(const juce::MouseEvent& e) override { holdMouse(noteAt(e.position)); }
     void mouseUp(const juce::MouseEvent&) override { holdMouse(-1); }
+    void visibilityChanged() override { if (!isVisible()) holdMouse(-1); }
     void focusLost(FocusChangeType) override { repaint(); }
     void focusGained(FocusChangeType) override { repaint(); }
 
@@ -382,7 +396,8 @@ private:
 class Panel::Surface final : public juce::Component, private juce::Timer
 {
 public:
-    explicit Surface(Standalone& instrument) : audio(instrument), keys(audio)
+    Surface(Standalone& instrument, std::function<void(int)> onDesignHeightChanged)
+        : audio(instrument), designHeightChanged(std::move(onDesignHeightChanged)), keys(audio)
     {
         setLookAndFeel(&skin);
         setSize(designWidth, designHeight);
@@ -423,20 +438,20 @@ public:
         g.setColour(line);
         g.drawRect(getLocalBounds().reduced(7), 1);
         paintHeader(g);
-        paintPlate(g, oscPanel, "OSCILLATOR");
+        paintOscillators(g);
         paintPlate(g, filterPanel, "FILTER");
         paintPlate(g, envPanel, "ENVELOPES");
         paintPlate(g, lfoPanel, "LFO");
         paintPlate(g, matrixPanel, "MOD MATRIX");
-        if (g.clipRegionIntersects(waveDisplay))
-            paintWavetable(g);
         paintLfoAndEnvelope(g);
         paintMatrix(g);
-        paintVoicing(g);
-        paintPerformance(g);
+        paintPlate(g, voicingPanel, "VOICING");
+        label(g, "PLAY MODE", { 36, 583, 246, 15 }, 11.5f, quiet, juce::Justification::centredLeft, true);
+        paintPlate(g, effectsPanel, {});
+        if (keys.isVisible()) paintPerformance(g);
         for (const auto& entry : sliders)
         {
-            if (entry.caption.isEmpty()) continue;
+            if (entry.caption.isEmpty() || !entry.control->isVisible()) continue;
             const auto area = entry.control->getBounds();
             const auto width = std::max(area.getWidth(), entry.fader ? 41 : 58);
             const int centre = area.getCentreX();
@@ -465,13 +480,30 @@ private:
     inline static const Rectangle<int> envPanel { 655, 111, 210, 425 };
     inline static const Rectangle<int> lfoPanel { 875, 111, 169, 425 };
     inline static const Rectangle<int> matrixPanel { 1054, 111, 364, 425 };
-    inline static const Rectangle<int> voicingPanel { 22, 550, 1396, 104 };
+    inline static const Rectangle<int> voicingPanel { 22, 550, 623, 104 };
+    inline static const Rectangle<int> effectsPanel { 655, 550, 763, 104 };
+    inline static const int compactHeight = 676;
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
-    inline static const Rectangle<int> waveDisplay { 100, 195, 266, 198 };
+    inline static const std::array<const char*, oscillatorCount> oscillatorNames { "A", "B", "C" };
+    inline static const std::array<const char*, 4> oscillatorColumns { "POS", "TUNE", "VOL", "PAN" };
+    inline static const std::array<Destination, destinationCount> matrixColumns {
+        positionA, positionB, positionC, pitchA, pitchB, pitchC, cutoff, resonance, pan
+    };
+    inline static const std::array<const char*, destinationCount> matrixHeadings {
+        "POS", "POS", "POS", "PCH", "PCH", "PCH", "CUT", "RES", "PAN"
+    };
     inline static const Rectangle<int> amountDisplay { 1069, 156, 334, 57 };
-    inline static const Rectangle<int> modeDisplay { 312, 570, 299, 62 };
     inline static const Rectangle<int> performanceStatus { 117, 683, 267, 84 };
+    inline static const Rectangle<int> headerNotice { 839, 78, 554, 15 };
     inline static const std::array<const char*, 3> modeNames { "POLY", "MONO", "LEGATO" };
+
+    static int oscillatorColumnX(int column) { return 218 + column * 72; }
+    static Rectangle<int> oscillatorDisplay(int row) { return { 36, 169 + row * 100, 146, 92 }; }
+    static Rectangle<int> oscillatorKnob(int row, int column)
+    {
+        return { oscillatorColumnX(column) - 34, oscillatorDisplay(row).getY() + 4, 68, 68 };
+    }
+    static int matrixColumnX(int column) { return 1139 + column * 23; }
 
     juce::TextButton& button(const String& caption, const String& name, Rectangle<int> area,
                              std::function<void()> action, bool onHeader = false)
@@ -522,12 +554,12 @@ private:
     }
 
     template <typename T, typename F>
-    void oscSlider(T Oscillator::* member, F select, const String& name, const String& caption,
-                   Rectangle<int> area, bool fader, double min, double max, double interval, Format format)
+    juce::Slider& oscSlider(T Oscillator::* member, F select, const String& name, Rectangle<int> area,
+                           double min, double max, double interval, Format format)
     {
-        slider(name, caption, area, fader, min, max, interval,
-               [=](const Patch& p) { return p.osc[select()].*member; },
-               [=](Patch& p, double v) { p.osc[select()].*member = static_cast<T>(v); }, std::move(format));
+        return slider(name, {}, area, false, min, max, interval,
+                      [=](const Patch& p) { return p.osc[select()].*member; },
+                      [=](Patch& p, double v) { p.osc[select()].*member = static_cast<T>(v); }, std::move(format));
     }
 
     template <typename T>
@@ -552,9 +584,16 @@ private:
             control.setTooltip(control.getName() + "  " + control.getTextFromValue(amount));
             control.setDoubleClickReturnValue(true, entry.read(factoryPresets().front().sound));
         }
-        engineButtons[0]->setToggleState(engine == 0, juce::dontSendNotification);
-        engineButtons[1]->setToggleState(engine == 1, juce::dontSendNotification);
-        viewButton->setButtonText(stacked ? "STACK" : "CYCLE");
+        for (int i = 0; i < oscillatorCount; ++i)
+        {
+            engineButtons[i]->setToggleState(engine == i, juce::dontSendNotification);
+            const auto& current = p.osc[i];
+            const String title = "Oscillator " + String(oscillatorNames[i]) + " wavetable: " + tableNames[current.table];
+            tableButtons[i]->setTitle(title);
+            tableButtons[i]->setTooltip(title + ". Click to choose.");
+            oscillatorKnobs[i][0]->setEnabled(!isFixedTable(current.table));
+        }
+        viewButton->setButtonText(stacked[engine] ? "STACK" : "CYCLE");
         phaseButton->setButtonText(osc.resetPhase ? "RESET" : "FREE");
         phaseButton->setToggleState(osc.resetPhase, juce::dontSendNotification);
         for (std::size_t i = 0; i < modeButtons.size(); ++i)
@@ -577,6 +616,8 @@ private:
 
     void createHeader()
     {
+        performanceButton = &button("HIDE KEYS", "Hide performance panel", { 330, 44, 102, 30 },
+                                    [this] { togglePerformance(); }, true);
         button("<", "Previous factory patch", { 448, 44, 36, 30 }, [this] { stepPreset(-1); }, true);
         button(">", "Next factory patch", { 778, 44, 36, 30 }, [this] { stepPreset(1); }, true);
         auto& presets = button({}, "Factory presets", patchDisplay, [this] { showPresets(); }, true);
@@ -596,46 +637,58 @@ private:
 
     void createOscillators()
     {
-        const auto currentOsc = [this] { return engine; };
-        oscSlider(&Oscillator::position, currentOsc, "Wavetable position", "POS", { 29, 255, 67, 67 },
-                  false, 0, 1, 0.001, percent);
-        button("TABLE -", "Previous wavetable", { 100, 157, 64, 27 }, [this] { stepTable(-1); });
-        button("TABLE +", "Next wavetable", { 170, 157, 64, 27 }, [this] { stepTable(1); });
-        viewButton = &button("STACK", "Toggle stacked or single-cycle waveform view", { 240, 157, 60, 27 }, [this]
+        for (int i = 0; i < oscillatorCount; ++i)
         {
-            stacked = !stacked;
-            syncControls();
-        });
-        phaseButton = &button("RESET", "Toggle note-triggered or free oscillator phase", { 306, 157, 60, 27 }, [this]
-        {
-            edit([&](Patch& p) { p.osc[engine].resetPhase = !p.osc[engine].resetPhase; });
-        });
-        for (int i = 0; i < 2; ++i)
-        {
-            const String tag(i == 0 ? "A" : "B");
-            engineButtons[i] = &button(tag, "Edit oscillator " + tag, { 380 + 56 * i, 157, 47, 27 }, [this, i]
+            const String tag(oscillatorNames[i]);
+            const String name = "Oscillator " + tag;
+            const auto row = [i] { return i; };
+            auto& table = button({}, name + " wavetable", oscillatorDisplay(i), [this, i] { showTables(i); });
+            table.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+            tableButtons[i] = &table;
+
+            auto& knobs = oscillatorKnobs[i];
+            knobs[0] = &oscSlider(&Oscillator::position, row, name + " wavetable position", oscillatorKnob(i, 0),
+                                  0, 1, 0.001, [this, i](double v)
+            {
+                const auto selectedTable = audio.patch().sound.osc[i].table;
+                if (isFixedTable(selectedTable)) return String("FIXED");
+                return percent(selectedTable == pulseTable ? pulseDuty(static_cast<float>(v)) : v);
+            });
+            knobs[1] = &oscSlider(&Oscillator::semitone, row, name + " semitones", oscillatorKnob(i, 1),
+                                  -12, 12, 1, [](double v) { return signedValue(juce::roundToInt(v), " st"); });
+            knobs[2] = &oscSlider(&Oscillator::level, row, name + " volume", oscillatorKnob(i, 2),
+                                  0, 1, 0.001, percent);
+            knobs[3] = &oscSlider(&Oscillator::pan, row, name + " stereo pan", oscillatorKnob(i, 3),
+                                  -1, 1, 0.01, [](double v)
+            {
+                if (std::abs(v) < 0.005) return String("C");
+                return String(v < 0 ? "L " : "R ") + percent(std::abs(v));
+            });
+
+            engineButtons[i] = &button(tag, name + " setup", { 38 + 32 * i, 498, 28, 23 }, [this, i]
             {
                 engine = i;
                 syncControls();
             });
-            oscSlider(&Oscillator::level, [i] { return i; }, "Oscillator " + tag + " level", "LVL",
-                      { 385 + 56 * i, 207, 37, 170 }, true, 0, 1, 0.001, percent);
-            oscSlider(&Oscillator::semitone, [i] { return i; }, "Oscillator " + tag + " semitones", "TUNE",
-                      { 378 + 56 * i, 427, 51, 51 }, false, -12, 12, 1,
-                      [](double v) { return signedValue(juce::roundToInt(v), " st"); });
         }
-        oscSlider(&Oscillator::octave, currentOsc, "Oscillator octave", "OCT", { 106, 427, 53, 53 },
-                  false, -2, 2, 1, [](double v) { return signedValue(juce::roundToInt(v)); });
-        oscSlider(&Oscillator::fine, currentOsc, "Oscillator fine tune in cents", "FINE", { 174, 427, 53, 53 },
-                  false, -50, 50, 0.1, [](double v) { return signedValue(juce::roundToInt(v), " c"); });
-        oscSlider(&Oscillator::pan, currentOsc, "Oscillator stereo pan", "PAN", { 242, 427, 53, 53 },
-                  false, -1, 1, 0.01, [](double v)
-                  {
-                      if (std::abs(v) < 0.005) return String("C");
-                      return String(v < 0 ? "L " : "R ") + percent(std::abs(v));
-                  });
-        oscSlider(&Oscillator::phase, currentOsc, "Oscillator start phase in reset mode", "PHASE", { 310, 427, 53, 53 },
-                  false, 0, 1, 0.005, [](double v) { return String(juce::roundToInt(v * 360)); });
+
+        phaseButton = &button("RESET", "Toggle note-triggered or free oscillator phase", { 142, 498, 53, 23 }, [this]
+        {
+            edit([&](Patch& p) { p.osc[engine].resetPhase = !p.osc[engine].resetPhase; });
+        });
+        viewButton = &button("STACK", "Toggle stacked or single-cycle waveform view", { 209, 498, 53, 23 }, [this]
+        {
+            stacked[engine] = !stacked[engine];
+            syncControls();
+        });
+
+        const auto selected = [this] { return engine; };
+        setupKnobs[0] = &oscSlider(&Oscillator::octave, selected, "Oscillator octave", { 282, 475, 41, 37 },
+                                   -2, 2, 1, [](double v) { return signedValue(juce::roundToInt(v)); });
+        setupKnobs[1] = &oscSlider(&Oscillator::fine, selected, "Oscillator fine tune in cents", { 351, 475, 41, 37 },
+                                   -50, 50, 0.1, [](double v) { return signedValue(juce::roundToInt(v), " c"); });
+        setupKnobs[2] = &oscSlider(&Oscillator::phase, selected, "Oscillator start phase in reset mode", { 420, 475, 41, 37 },
+                                   0, 1, 0.005, [](double v) { return String(juce::roundToInt(v * 360)); });
     }
 
     void createFilter()
@@ -701,8 +754,9 @@ private:
     void createMatrix()
     {
         for (int row = 0; row < sourceCount; ++row)
-            for (int col = 0; col < destinationCount; ++col)
+            for (int column = 0; column < destinationCount; ++column)
             {
+                const auto col = matrixColumns[column];
                 auto cell = std::make_unique<MatrixCell>(String(sourceNames[row]) + " to " + destinationNames[col]);
                 cell->onClick = [this, row, col]
                 {
@@ -711,7 +765,7 @@ private:
                     syncControls();
                 };
                 addAndMakeVisible(*cell);
-                cell->setBounds(1141 + col * 29, 248 + row * 32, 26, 26);
+                cell->setBounds(matrixColumnX(column), 248 + row * 32, 22, 26);
                 matrix[row][col] = std::move(cell);
             }
         const auto read = [this](const Patch& p) { return p.matrix[matrixRow][matrixCol]; };
@@ -741,32 +795,48 @@ private:
                     edit([mode](Patch& p) { p.voicing.mode = mode; });
             });
         }
-        slider("Glide time between overlapping Mono or Legato notes", "GLIDE", { 698, 558, 62, 62 },
+        slider("Glide time between overlapping Mono or Legato notes", "GLIDE", { 317, 558, 62, 62 },
                false, 0, maxGlide, 0.001,
                [](const Patch& p) { return p.voicing.glide; },
                [](Patch& p, double v) { p.voicing.glide = static_cast<float>(v); },
                [](double v) { return v == 0.0 ? String("Off") : seconds(v); }, 0.15);
-        slider("Unison layers per note", "UNISON", { 878, 558, 62, 62 }, false, 1, maxUnison, 1,
+        slider("Unison layers per note", "UNISON", { 398, 558, 62, 62 }, false, 1, maxUnison, 1,
                [](const Patch& p) { return p.voicing.unison; },
                [](Patch& p, double v) { p.voicing.unison = static_cast<int>(v); },
                [](double v) { return String(static_cast<int>(v)) + "x"; });
-        slider("Unison detune in cents", "DETUNE", { 1067, 558, 62, 62 }, false, 0, maxUnisonDetune, 1,
+        slider("Unison detune in cents", "DETUNE", { 479, 558, 62, 62 }, false, 0, maxUnisonDetune, 1,
                [](const Patch& p) { return p.voicing.detune; },
                [](Patch& p, double v) { p.voicing.detune = static_cast<float>(v); },
                [](double v) { return String(juce::roundToInt(v)) + " ct"; });
-        slider("Unison stereo width", "WIDTH", { 1256, 558, 62, 62 }, false, 0, 1, 0.01,
+        slider("Unison stereo width", "WIDTH", { 560, 558, 62, 62 }, false, 0, 1, 0.01,
                [](const Patch& p) { return p.voicing.width; },
                [](Patch& p, double v) { p.voicing.width = static_cast<float>(v); }, percent);
     }
 
     void createKeyboard()
     {
-        slider("Master output volume", "VOLUME", { 42, 681, 62, 62 }, false, 0, 1, 0.001,
-               [](const Patch& p) { return p.volume; }, [](Patch& p, double v) { p.volume = static_cast<float>(v); }, percent);
+        masterVolume = &slider("Master output volume", "VOLUME", { 42, 681, 62, 62 }, false, 0, 1, 0.001,
+                               [](const Patch& p) { return p.volume; },
+                               [](Patch& p, double v) { p.volume = static_cast<float>(v); }, percent);
         octaveDown = &button("-", "Lower keyboard octave", { 405, 723, 31, 29 }, [this] { changeOctave(-1); });
         octaveUp = &button("+", "Raise keyboard octave", { 451, 723, 31, 29 }, [this] { changeOctave(1); });
         addAndMakeVisible(keys);
         keys.setBounds(502, 686, 894, 74);
+    }
+
+    void togglePerformance()
+    {
+        const bool show = !keys.isVisible();
+        keys.setVisible(show);
+        masterVolume->setVisible(show);
+        octaveDown->setVisible(show);
+        octaveUp->setVisible(show);
+        const String action = show ? "Hide performance panel" : "Show performance panel";
+        performanceButton->setButtonText(show ? "HIDE KEYS" : "SHOW KEYS");
+        performanceButton->setTitle(action);
+        performanceButton->setTooltip(action);
+        setSize(designWidth, show ? designHeight : compactHeight);
+        designHeightChanged(getHeight());
     }
 
     void changeOctave(int step)
@@ -778,12 +848,24 @@ private:
         repaint();
     }
 
-    void stepTable(int step)
+    void showTables(int row)
     {
-        edit([&](Patch& p)
+        engine = row;
+        syncControls();
+        const auto current = audio.patch().sound.osc[row].table;
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Classic analog");
+        for (int table = sineTable; table < tableCount; ++table)
+            menu.addItem(table + 1, tableNames[table], true, table == current);
+        menu.addSeparator();
+        menu.addSectionHeader("Morphing tables");
+        for (int table = basicShapes; table < sineTable; ++table)
+            menu.addItem(table + 1, tableNames[table], true, table == current);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(tableButtons[row]),
+            [safe = SafePointer<Surface>(this), row](int id)
         {
-            auto& table = p.osc[engine].table;
-            table = (table + step + tableCount) % tableCount;
+            if (safe != nullptr && id > 0 && safe->audio.patch().sound.osc[row].table != id - 1)
+                safe->edit([row, id](Patch& p) { p.osc[row].table = id - 1; });
         });
     }
 
@@ -892,13 +974,13 @@ private:
         message = std::move(text);
         messageIsError = error;
         messageEnd = juce::Time::getMillisecondCounterHiRes() + 4000.0;
-        repaint(performanceStatus);
+        repaint(keys.isVisible() ? performanceStatus : headerNotice);
     }
 
     void timerCallback() override
     {
         repaint(1100, 35, 185, 55);
-        repaint(performanceStatus);
+        repaint(keys.isVisible() ? performanceStatus : headerNotice);
     }
 
     void paintPlate(Graphics& g, Rectangle<int> area, const String& heading) const
@@ -911,8 +993,9 @@ private:
         g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 6.0f, 1.0f);
         g.setColour(steel);
         g.drawHorizontalLine(area.getY() + 1, static_cast<float>(area.getX() + 6), static_cast<float>(area.getRight() - 6));
-        label(g, heading, { area.getX() + 13, area.getY() + 10, area.getWidth() - 26, 20 }, 17.0f, ink,
-              juce::Justification::centredLeft, true);
+        if (heading.isNotEmpty())
+            label(g, heading, { area.getX() + 13, area.getY() + 10, area.getWidth() - 26, 20 }, 17.0f, ink,
+                  juce::Justification::centredLeft, true);
     }
 
     void paintHeader(Graphics& g) const
@@ -940,6 +1023,8 @@ private:
         const auto id = presetSlot < 0 ? String("USER") : String(presetSlot + 1).paddedLeft('0', 2) + "  FACTORY";
         pixels(g, id + (edited ? "  / EDIT" : ""), 505, 43, 1, amber.withAlpha(0.68f));
         pixels(g, String::fromUTF8(audio.patch().name.c_str()).substring(0, 21), 505, 58, 2, amber);
+        if (!keys.isVisible() && juce::Time::getMillisecondCounterHiRes() < messageEnd)
+            label(g, message, headerNotice, 12.5f, messageIsError ? amber : steel);
 
         label(g, "OUT", { 1101, 39, 54, 19 }, 12.0f, steel, juce::Justification::centredLeft, true);
         const auto amount = audio.outputPeak();
@@ -952,27 +1037,67 @@ private:
         }
     }
 
-    void paintWavetable(Graphics& g) const
+    void paintOscillators(Graphics& g) const
     {
-        display(g, waveDisplay);
-        const auto& osc = audio.patch().sound.osc[engine];
-        const int x = waveDisplay.getX() + 13, end = waveDisplay.getRight() - 14;
-        pixels(g, engine == 0 ? "A" : "B", x, 210, 2, amber);
-        pixels(g, String(tableNames[osc.table]), x + 24, 213, 1, amber);
-        pixels(g, String(osc.table + 1).paddedLeft('0', 2) + "/06", end - 28, 213, 1, amber.withAlpha(0.67f));
-        g.setColour(amber.withAlpha(0.14f));
-        g.drawHorizontalLine(230, static_cast<float>(x), static_cast<float>(end));
-        g.drawHorizontalLine(367, static_cast<float>(x), static_cast<float>(end));
-        for (int i = 0; i <= 8; ++i)
-            g.drawVerticalLine(x + (end - x) * i / 8, 236.0f, 362.0f);
+        if (!g.clipRegionIntersects(oscPanel)) return;
+        paintPlate(g, oscPanel, "TABLE OSC");
+        for (int column = 0; column < static_cast<int>(oscillatorColumns.size()); ++column)
+        {
+            const int x = oscillatorColumnX(column);
+            label(g, oscillatorColumns[column], { x - 31, 143, 62, 20 }, 14.0f, ink,
+                  juce::Justification::centred, true);
+        }
+        for (int row = 0; row < oscillatorCount; ++row)
+        {
+            const auto area = oscillatorDisplay(row);
+            g.setColour(quiet.withAlpha(0.65f));
+            g.drawHorizontalLine(oscillatorKnob(row, 0).getCentreY(), static_cast<float>(area.getRight()),
+                                 static_cast<float>(oscillatorColumnX(3)));
+            paintWavetable(g, row, area);
+            for (auto* knob : oscillatorKnobs[row])
+            {
+                const auto bounds = knob->getBounds();
+                const Rectangle<int> readout { bounds.getX() + 8, bounds.getBottom() + 1, bounds.getWidth() - 16, 16 };
+                g.setColour(plate);
+                g.fillRect(readout);
+                label(g, knob->getTextFromValue(knob->getValue()), readout, 12.0f,
+                      knob->isEnabled() ? ink : quiet, juce::Justification::centred);
+            }
+        }
+
+        g.setColour(line);
+        g.drawHorizontalLine(470, 37.0f, 482.0f);
+        label(g, "OSC SETUP", { 38, 477, 90, 18 }, 11.0f, quiet, juce::Justification::centredLeft, true);
+        label(g, "PHASE MODE", { 132, 477, 73, 18 }, 11.0f, quiet, juce::Justification::centred, true);
+        label(g, "DISPLAY", { 201, 477, 69, 18 }, 11.0f, quiet, juce::Justification::centred, true);
+        static constexpr const char* captions[] { "OCT", "FINE", "PHASE" };
+        for (int i = 0; i < static_cast<int>(setupKnobs.size()); ++i)
+        {
+            auto& knob = *setupKnobs[i];
+            const auto text = String(captions[i]) + " " + knob.getTextFromValue(knob.getValue());
+            label(g, text, { knob.getBounds().getCentreX() - 33, 511, 66, 15 }, 11.0f, quiet, juce::Justification::centred);
+        }
+    }
+
+    void paintWavetable(Graphics& g, int row, Rectangle<int> area) const
+    {
+        display(g, area);
+        const auto& osc = audio.patch().sound.osc[row];
+        const auto x = static_cast<float>(area.getX() + 11), end = static_cast<float>(area.getRight() - 11);
+        const auto top = static_cast<float>(area.getY());
+        pixels(g, "OSC " + String(oscillatorNames[row]), x, top + 11, 1, amber.withAlpha(row == engine ? 1.0f : 0.65f));
+        pixels(g, tableNames[osc.table], x, top + 26, 1.3f, amber);
+        g.setColour(amber.withAlpha(0.7f));
+        g.drawLine(end - 7, top + 13, end - 3, top + 17, 1.2f);
+        g.drawLine(end - 3, top + 17, end + 1, top + 13, 1.2f);
         const auto plot = [&](float frame, float y, float extent, float strength, float stroke)
         {
             juce::Path path;
-            for (int i = 0; i <= 120; ++i)
+            for (int i = 0; i <= 128; ++i)
             {
-                const float phase = i / 120.0f;
+                const float phase = i / 128.0f;
                 const float value = audio.waves().display(osc.table, frame, phase);
-                const float px = static_cast<float>(x) + static_cast<float>(end - x) * phase;
+                const float px = x + (end - x) * phase;
                 const float py = y - value * extent;
                 if (i == 0) path.startNewSubPath(px, py);
                 else path.lineTo(px, py);
@@ -980,21 +1105,19 @@ private:
             g.setColour(amber.withAlpha(strength));
             g.strokePath(path, juce::PathStrokeType(stroke));
         };
-        if (stacked)
+        if (stacked[row])
         {
-            for (int frame = 6; frame >= 0; --frame)
-                plot(frame / 6.0f, 346.0f - frame * 16.0f, 12.0f, 0.27f, 1.0f);
-            plot(osc.position, 346.0f - osc.position * 96.0f, 14.0f, 0.94f, 2.0f);
+            const float position = isFixedTable(osc.table) ? 0.5f : osc.position;
+            for (int frame = 4; frame >= 0; --frame)
+                plot(frame / 4.0f, top + 79.0f - frame * 7.0f, 6.0f, 0.44f, 0.8f);
+            plot(position, top + 79.0f - position * 28.0f, 6.0f, 0.99f, 1.9f);
         }
         else
         {
-            g.setColour(amber.withAlpha(0.21f));
-            g.drawHorizontalLine(299, static_cast<float>(x), static_cast<float>(end));
-            plot(osc.position, 299.0f, 56.0f, 0.92f, 1.8f);
+            g.setColour(amber.withAlpha(0.19f));
+            g.drawHorizontalLine(area.getY() + 65, x, end);
+            plot(osc.position, top + 65.0f, 21.0f, 0.95f, 1.65f);
         }
-        pixels(g, stacked ? "FRAME SCAN" : "SINGLE CYCLE", x, 376, 1, amber.withAlpha(0.63f));
-        const auto amount = percent(osc.position);
-        pixels(g, amount, end - amount.length() * 6, 376, 1, amber);
     }
 
     void paintLfoAndEnvelope(Graphics& g) const
@@ -1026,33 +1149,18 @@ private:
         for (int i = 0; i < sourceCount; ++i)
             label(g, String(sourceNames[i]).toUpperCase(), { 1069, 248 + i * 32, 68, 23 }, 12.5f,
                   i == matrixRow ? mark : quiet, juce::Justification::centredLeft, i == matrixRow);
-        static constexpr const char* headings[] { "POS", "POS", "PITCH", "PITCH", "CUT", "RES", "PAN" };
-        for (int i = 0; i < destinationCount; ++i)
+        for (int column = 0; column < destinationCount; ++column)
         {
-            const int x = 1141 + 29 * i;
-            const auto colour = i == matrixCol ? mark : quiet;
-            label(g, headings[i], { x, i < 4 ? 218 : 227, 26, 15 }, 10.75f, colour,
+            const int x = matrixColumnX(column);
+            const auto colour = matrixColumns[column] == matrixCol ? mark : quiet;
+            const bool isOscillator = column < 2 * oscillatorCount;
+            label(g, matrixHeadings[column], { x, isOscillator ? 218 : 226, 22, 15 }, 10.0f, colour,
                   juce::Justification::centred, true);
-            if (i < 4)
-                label(g, i % 2 == 0 ? "A" : "B", { x, 231, 26, 14 }, 10.75f, colour,
+            if (isOscillator)
+                label(g, oscillatorNames[column % oscillatorCount], { x, 231, 22, 14 }, 10.0f, colour,
                       juce::Justification::centred, true);
         }
         label(g, "AMOUNT", { 1341, 324, 68, 15 }, 10.5f, quiet, juce::Justification::centred, true);
-    }
-
-    void paintVoicing(Graphics& g) const
-    {
-        paintPlate(g, voicingPanel, "VOICING");
-        display(g, modeDisplay);
-        const auto mode = static_cast<std::size_t>(audio.patch().sound.voicing.mode);
-        const std::array<String, 3> details {
-            String(Synth::polyphony) + " NOTE POLYPHONY", "LAST NOTE / RETRIGGER", "LAST NOTE / ENVELOPE HOLD"
-        };
-        pixels(g, modeNames[mode], 328, 582, 2, amber);
-        pixels(g, details[mode], 328, 610, 1, amber.withAlpha(0.72f));
-        g.setColour(line);
-        for (int x : { 638, 815 })
-            g.drawVerticalLine(x, 569.0f, 636.0f);
     }
 
     void paintPerformance(Graphics& g) const
@@ -1078,6 +1186,7 @@ private:
     }
 
     Standalone& audio;
+    const std::function<void(int)> designHeightChanged;
     Skin skin;
     PerformanceKeys keys;
     juce::TooltipWindow tooltips { this, 450 };
@@ -1086,22 +1195,33 @@ private:
     std::array<std::array<std::unique_ptr<MatrixCell>, destinationCount>, sourceCount> matrix;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::File fileDirectory;
-    std::array<juce::TextButton*, 2> engineButtons {}, shapeButtons {}, lfoModeButtons {};
+    std::array<juce::TextButton*, oscillatorCount> engineButtons {}, tableButtons {};
+    std::array<std::array<juce::Slider*, oscillatorColumns.size()>, oscillatorCount> oscillatorKnobs {};
+    std::array<juce::Slider*, 3> setupKnobs {};
+    std::array<bool, oscillatorCount> stacked { true, true, true };
+    std::array<juce::TextButton*, 2> shapeButtons {}, lfoModeButtons {};
     std::array<juce::TextButton*, 3> modeButtons {};
     juce::TextButton* viewButton = nullptr;
     juce::TextButton* phaseButton = nullptr;
     juce::TextButton* filterMode = nullptr;
     juce::TextButton* presetMenu = nullptr;
     juce::TextButton* audioButton = nullptr;
+    juce::TextButton* performanceButton = nullptr;
     juce::TextButton* octaveDown = nullptr;
     juce::TextButton* octaveUp = nullptr;
+    juce::Slider* masterVolume = nullptr;
     int engine = 0, matrixRow = 0, matrixCol = 0, octave = 4, presetSlot = -1;
-    bool stacked = true, edited = false, messageIsError = false;
+    bool edited = false, messageIsError = false;
     String message;
     double messageEnd = 0.0;
 };
 
-Panel::Panel(Standalone& audio) : surface(std::make_unique<Surface>(audio))
+Panel::Panel(Standalone& audio, std::function<void(int)> onDesignHeightChanged)
+    : surface(std::make_unique<Surface>(audio, [this, onDesignHeightChanged = std::move(onDesignHeightChanged)](int height)
+      {
+          onDesignHeightChanged(height);
+          resized();
+      }))
 {
     addAndMakeVisible(*surface);
     setSize(designWidth, designHeight);
@@ -1117,8 +1237,9 @@ void Panel::paint(Graphics& g) { g.fillAll(dark); }
 
 void Panel::resized()
 {
-    const float scale = std::min(getWidth() / static_cast<float>(designWidth), getHeight() / static_cast<float>(designHeight));
+    const int height = surface->getHeight();
+    const float scale = std::min(getWidth() / static_cast<float>(designWidth), getHeight() / static_cast<float>(height));
     surface->setTransform(juce::AffineTransform::scale(scale).translated(
-        (getWidth() - designWidth * scale) * 0.5f, (getHeight() - designHeight * scale) * 0.5f));
+        (getWidth() - designWidth * scale) * 0.5f, (getHeight() - height * scale) * 0.5f));
 }
 }

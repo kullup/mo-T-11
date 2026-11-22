@@ -7,27 +7,36 @@
 
 namespace mot
 {
-constexpr int tableCount = 6;
+constexpr int oscillatorCount = 3;
 constexpr int sourceCount = 8;
-constexpr int destinationCount = 7;
-constexpr int presetCount = 8;
+constexpr int presetCount = 9;
 constexpr int maxUnison = 4;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 
 enum Source { lfo1, lfo2, filterEnvelope, ampEnvelope, velocity, keyTrack, wheel, pressure };
-enum Destination { positionA, positionB, pitchA, pitchB, cutoff, resonance, pan };
+enum Destination { positionA, positionB, pitchA, pitchB, cutoff, resonance, pan, positionC, pitchC, destinationCount };
+enum Wavetable
+{
+    basicShapes, pulseWidth, hollowBody, harmonicLadder, foldedSine, glassFormants,
+    sineTable, triangleTable, sawTable, squareTable, pulseTable, tableCount
+};
 enum class FilterMode { lowPass, bandPass, highPass };
 enum class Shape { sine, triangle, ramp, square };
 enum class PlayMode { poly, mono, legato };
 
 inline constexpr std::array<const char*, tableCount> tableNames {
-    "Basic Shapes", "Pulse Width", "Hollow Body", "Harmonic Ladder", "Folded Sine", "Glass Formants"
+    "Basic Shapes", "Pulse Width", "Hollow Body", "Harmonic Ladder", "Folded Sine", "Glass Formants",
+    "Sine", "Triangle", "Sawtooth", "Square", "Variable Pulse"
 };
+inline constexpr bool isFixedTable(int table) noexcept { return table >= sineTable && table <= squareTable; }
+inline constexpr float pulseDuty(float position) noexcept { return 0.05f + 0.90f * position; }
+inline constexpr std::array<Destination, oscillatorCount> positionDestinations { positionA, positionB, positionC };
+inline constexpr std::array<Destination, oscillatorCount> pitchDestinations { pitchA, pitchB, pitchC };
 inline constexpr std::array<const char*, sourceCount> sourceNames {
     "LFO 1", "LFO 2", "Filter Env", "Amp Env", "Velocity", "Key Track", "Mod Wheel", "Pressure"
 };
 inline constexpr std::array<const char*, destinationCount> destinationNames {
-    "Pos A", "Pos B", "Pitch A", "Pitch B", "Cutoff", "Reso", "Pan"
+    "Pos A", "Pos B", "Pitch A", "Pitch B", "Cutoff", "Reso", "Pan", "Pos C", "Pitch C"
 };
 
 struct Oscillator
@@ -58,7 +67,9 @@ struct Voicing
 
 struct Patch
 {
-    std::array<Oscillator, 2> osc { Oscillator {}, Oscillator { 0, 0.6f, 0.0f } };
+    std::array<Oscillator, oscillatorCount> osc {
+        Oscillator {}, Oscillator { basicShapes, 0.6f, 0.0f }, Oscillator { triangleTable, 0.5f, 0.0f }
+    };
     FilterMode filterMode = FilterMode::lowPass;
     float cutoff = 7800.0f, resonance = 0.13f, drive = 0.0f, volume = 0.65f;
     Envelope filterEnv { 0.015f, 0.28f, 0.20f, 0.25f };

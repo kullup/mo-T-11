@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -131,12 +134,58 @@ void modulationAndPolyphony(const WaveBank& bank)
             const float phase = i / 64.0f;
             difference += std::abs(bank.display(table, 0, phase) - bank.display(table, 1, phase));
         }
-        check(difference > 0.5f, "A factory wavetable has identical end frames");
+        check(isFixedTable(table) ? difference == 0.0f : difference > 0.5f,
+              "Wavetable position did not match its fixed or morphing mode");
         check(std::abs(bank.display(table, 0.5f, 0) - bank.display(table, 0.5f, 1)) < 1.0e-6f,
               "Wavetable is discontinuous at the cycle seam");
         check(bank.sample(table, 0.5f, 0.6f, 24000, 48000) == 0.0f,
               "A fundamental beyond the band limit was rendered");
     }
+}
+
+void analogOscillators(const WaveBank& bank)
+{
+    const auto ratioAtEighth = [&](int table)
+    {
+        return bank.display(table, 0.5f, 0.125f) / bank.display(table, 0.5f, 0.25f);
+    };
+    check(std::abs(ratioAtEighth(sineTable) - std::sqrt(0.5f)) < 0.01f, "Sine table has the wrong shape");
+    check(std::abs(ratioAtEighth(triangleTable) - 0.5f) < 0.01f, "Triangle table has the wrong slope");
+    check(std::abs(ratioAtEighth(sawTable) - 0.5f) < 0.01f && bank.display(sawTable, 0.5f, 0.625f) < -0.5f,
+          "Sawtooth table has the wrong slope or reset");
+    check(std::abs(ratioAtEighth(squareTable) - 1.0f) < 0.02f && bank.display(squareTable, 0.5f, 0.75f) < -0.7f,
+          "Square table has the wrong shape");
+    for (float position : { 0.0f, 0.27f, 0.5f, 1.0f })
+    {
+        int high = 0;
+        for (int sample = 0; sample < 1024; ++sample)
+            high += bank.display(pulseTable, position, sample / 1024.0f) > 0.0f;
+        check(std::abs(high / 1024.0f - pulseDuty(position)) < 0.01f, "Pulse position did not set the expected duty cycle");
+    }
+
+    Patch p = sinePatch();
+    p.osc[0].level = 0.0f;
+    p.osc[2] = { sineTable, 0.25f, 0.8f, 0, 0, 0.0f, -1.0f };
+    p.matrix[velocity][pitchC] = -1.0f;
+    Synth synth(bank);
+    synth.setPatch(p);
+    const Event a440 { EventType::noteOn, 0, 1, 69 };
+    const Block third(synth, 7200, { a440 });
+    check(peak(third.left) > 0.05f && peak(third.right) < 0.00001f
+          && std::abs(pitch(third.left, 4200, 7200) - 220.0f) < 0.5f,
+          "Oscillator C did not render with its pan and pitch route");
+
+    p.osc[2].table = pulseTable;
+    p.matrix[velocity][positionC] = 0.5f;
+    synth.prepare(48000);
+    synth.setPatch(p);
+    const Block modulated(synth, 4800, { a440 });
+    p.osc[2].position = 0.75f;
+    p.matrix[velocity][positionC] = 0.0f;
+    synth.prepare(48000);
+    synth.setPatch(p);
+    const Block direct(synth, 4800, { a440 });
+    check(modulated.left == direct.left, "Oscillator C position route did not set pulse width");
 }
 
 void monoPlaying(const WaveBank& bank)
@@ -249,22 +298,37 @@ void patches()
         check(decoded && encodePatch(*decoded) == encoded, "Preset failed round-trip");
     }
     NamedPatch custom { "Custom \"01\"", factoryPresets()[2].sound };
-    custom.sound.matrix[7][6] = -0.987f;
+    custom.sound.osc[2] = { pulseTable, 0.67f, 0.55f, -1, 3, 2.5f, -0.4f, 0.2f, false };
+    custom.sound.matrix[pressure][pan] = -0.987f;
+    custom.sound.matrix[wheel][positionC] = 0.27f;
+    custom.sound.matrix[velocity][pitchC] = -0.31f;
     custom.sound.voicing = { PlayMode::legato, 0.123f, 4, 35.0f, 0.83f };
     const auto encoded = encodePatch(custom);
     const auto decoded = decodePatch(encoded);
     check(decoded && encodePatch(*decoded) == encoded, "Custom patch failed round-trip");
     check(!decodePatch(encoded.substr(0, encoded.size() / 2)), "Truncated patch was accepted");
-    check(!decodePatch("MOT11 3" + encoded.substr(7)), "Unknown patch version was accepted");
+    check(!decodePatch("MOT11 5" + encoded.substr(7)), "Unknown patch version was accepted");
     check(!decodePatch(encoded + "junk"), "Unexpected trailing content was accepted");
     const auto voicing = encoded.find("VOICING ");
     const auto matrix = encoded.find("MATRIX\n", voicing);
-    const auto legacy = decodePatch("MOT11 1" + encoded.substr(7, voicing - 7) + encoded.substr(matrix));
-    const Voicing defaults;
-    check(legacy && legacy->sound.voicing.mode == defaults.mode && legacy->sound.voicing.glide == defaults.glide
-          && legacy->sound.voicing.unison == defaults.unison && legacy->sound.voicing.detune == defaults.detune
-          && legacy->sound.voicing.width == defaults.width && legacy->sound.matrix == custom.sound.matrix,
-          "Legacy patch failed to load with default voicing");
+    const auto third = encoded.find("OSC_C "), filter = encoded.find("FILTER ");
+    auto migrated = custom;
+    migrated.sound.osc[2] = Patch {}.osc[2];
+    std::ostringstream oldMatrix;
+    oldMatrix << "MATRIX\n" << std::setprecision(std::numeric_limits<float>::max_digits10);
+    for (auto& row : migrated.sound.matrix)
+    {
+        for (int i = 0; i <= pan; ++i)
+            oldMatrix << row[i] << ' ';
+        oldMatrix << '\n';
+        row[positionC] = row[pitchC] = 0.0f;
+    }
+    const auto oldPrefix = encoded.substr(7, third - 7) + encoded.substr(filter, voicing - filter);
+    const auto legacy2 = decodePatch("MOT11 2" + oldPrefix + encoded.substr(voicing, matrix - voicing) + oldMatrix.str());
+    check(legacy2 && encodePatch(*legacy2) == encodePatch(migrated), "Version 2 patch failed to migrate");
+    migrated.sound.voicing = {};
+    const auto legacy1 = decodePatch("MOT11 1" + oldPrefix + oldMatrix.str());
+    check(legacy1 && encodePatch(*legacy1) == encodePatch(migrated), "Version 1 patch failed to migrate");
     check(!decodePatch(encoded.substr(0, voicing) + "VOICING 2 0.1 5 50 1\n" + encoded.substr(matrix)),
           "Out-of-range unison was accepted");
 }
@@ -277,6 +341,7 @@ int main()
         const WaveBank bank;
         notes(bank);
         modulationAndPolyphony(bank);
+        analogOscillators(bank);
         monoPlaying(bank);
         glideAndUnison(bank);
         patches();

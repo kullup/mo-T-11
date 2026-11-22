@@ -1,6 +1,6 @@
 # MO-T 11
 
-MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, two oscillators per voice, six factory wavetables, eight factory patches, and a 56-route modulation matrix. The front panel follows [Mockup.png](Mockup.png).
+MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, three oscillators per voice, 11 factory wavetables, nine factory patches, and a 72-route modulation matrix. The front panel follows [Mockup.png](Mockup.png).
 
 ## Play
 
@@ -13,7 +13,8 @@ MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, two oscil
 
 ## Make a patch
 
-- **Oscillator.** Select **A** or **B** to edit its wavetable, position, octave, fine tune, pan, and start phase. Each oscillator’s level and semitone tune stay visible. **Table −/+** browse the six tables. **Stack/Cycle** changes the display view. **Reset** starts each note at the phase knob’s setting. **Free** varies the starting phase from note to note.
+- **Table Osc.** Each of the three rows has its own wavetable display, **Pos**, semitone **Tune**, **Vol**, and **Pan**. Click a display to choose a wavetable for that row. Under **Classic analog**, Sine, Triangle, Sawtooth, and Square are fixed shapes. With Variable Pulse, **Pos** sets the duty cycle from 5% to 95% and can be modulated for PWM. The **Analog Stack** factory patch layers sawtooth, square, and a triangle sub-oscillator.
+- **Osc Setup.** Select **A**, **B**, or **C** in the setup strip to adjust its octave, fine tuning, and start phase. **Reset** starts each note at the phase knob’s setting. **Free** varies the starting phase from note to note. **Stack/Cycle** switches that row between a stack of frames and a single waveform. Patches from earlier versions load with oscillator C muted.
 - **Filter and envelopes.** Click the filter mode to cycle low-pass, band-pass, and high-pass. Use cutoff, resonance, and drive to shape the signal. The amp ADSR controls the voice’s gain. Route **Filter Env** to **Cutoff** for a filter sweep, or to another destination for a different contour.
 - **LFOs.** Set rate and depth, then cycle sine, triangle, ramp, and square. **Free** runs continuously. **Key** starts a separate cycle for each played note.
 - **Matrix.** Press a cell to select its row-to-column route. Move the **Amount** fader for a direct setting or drag **Fine** for small adjustments. Amber indicates positive depth and blue indicates negative depth. **Clear** zeros the selected route. At full depth, pitch moves up to an octave and cutoff up to four octaves. Position, resonance, and pan modulate across their control ranges.

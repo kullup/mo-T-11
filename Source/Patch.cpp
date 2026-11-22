@@ -8,6 +8,14 @@
 
 namespace mot
 {
+namespace
+{
+constexpr std::array<const char*, oscillatorCount> oscillatorTags { "OSC_A", "OSC_B", "OSC_C" };
+constexpr int patchVersion = 4;
+constexpr int macroBranchVersion = 3;
+constexpr int legacyOscillatorCount = 2, legacyDestinationCount = 7;
+}
+
 const std::array<NamedPatch, presetCount>& factoryPresets()
 {
     static const auto presets = []
@@ -89,6 +97,16 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         keys.matrix[velocity][cutoff] = 0.22f;
         keys.matrix[lfo2][pitchB] = 0.012f;
         bank[7] = { "Night Keys", keys };
+
+        Patch analog;
+        analog.osc[0] = { sawTable, 0.5f, 0.65f, 0, 0, -5.0f, -0.21f, 0.0f, false };
+        analog.osc[1] = { squareTable, 0.5f, 0.43f, 0, 0, 5.0f, 0.21f, 0.0f, false };
+        analog.osc[2] = { triangleTable, 0.5f, 0.31f, -1 };
+        analog.cutoff = 1600; analog.resonance = 0.28f; analog.drive = 0.12f;
+        analog.ampEnv = { 0.012f, 0.31f, 0.72f, 0.24f };
+        analog.filterEnv = { 0.006f, 0.36f, 0.13f, 0.25f };
+        analog.matrix[filterEnvelope][cutoff] = 0.58f;
+        bank[8] = { "Analog Stack", analog };
         return bank;
     }();
     return presets;
@@ -100,11 +118,11 @@ std::string encodePatch(const NamedPatch& named)
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << std::setprecision(std::numeric_limits<float>::max_digits10);
-    out << "MOT11 2\nNAME " << std::quoted(named.name) << '\n';
+    out << "MOT11 " << patchVersion << "\nNAME " << std::quoted(named.name) << '\n';
     for (std::size_t i = 0; i < p.osc.size(); ++i)
     {
         const auto& o = p.osc[i];
-        out << (i == 0 ? "OSC_A" : "OSC_B") << ' ' << o.table << ' ' << o.position << ' '
+        out << oscillatorTags[i] << ' ' << o.table << ' ' << o.position << ' '
             << o.level << ' ' << o.octave << ' ' << o.semitone << ' ' << o.fine << ' '
             << o.pan << ' ' << o.phase << ' ' << o.resetPhase << '\n';
     }
@@ -152,17 +170,20 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
 
     NamedPatch named;
     int version = 0;
-    if (!readTag("MOT11") || !readRange(version, 1, 2) || !readTag("NAME")
+    if (!readTag("MOT11") || !readRange(version, 1, patchVersion) || version == macroBranchVersion || !readTag("NAME")
         || !(in >> std::quoted(named.name)) || named.name.empty() || named.name.size() > 96
         || named.name.find_first_of("\r\n\t") != std::string::npos
         || named.name.find('\0') != std::string::npos)
         return std::nullopt;
 
     auto& p = named.sound;
-    for (std::size_t i = 0; i < p.osc.size(); ++i)
+    const bool legacy = version < patchVersion;
+    const int oscillatorSlots = legacy ? legacyOscillatorCount : oscillatorCount;
+    const int lastTable = legacy ? static_cast<int>(glassFormants) : tableCount - 1;
+    for (int i = 0; i < oscillatorSlots; ++i)
     {
         auto& o = p.osc[i];
-        if (!readTag(i == 0 ? "OSC_A" : "OSC_B") || !readRange(o.table, 0, tableCount - 1)
+        if (!readTag(oscillatorTags[i]) || !readRange(o.table, 0, lastTable)
             || !readRange(o.position, 0, 1) || !readRange(o.level, 0, 1)
             || !readRange(o.octave, -2, 2) || !readRange(o.semitone, -12, 12)
             || !readRange(o.fine, -50, 50) || !readRange(o.pan, -1, 1)
@@ -193,7 +214,7 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
             return std::nullopt;
         lfo.shape = static_cast<Shape>(shape);
     }
-    if (version == 2)
+    if (version >= 2)
     {
         auto& v = p.voicing;
         int playMode = 0;
@@ -205,9 +226,10 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
     }
     if (!readTag("MATRIX"))
         return std::nullopt;
+    const int routesPerSource = legacy ? legacyDestinationCount : static_cast<int>(destinationCount);
     for (auto& row : p.matrix)
-        for (auto& value : row)
-            if (!readRange(value, -1, 1))
+        for (int i = 0; i < routesPerSource; ++i)
+            if (!readRange(row[i], -1, 1))
                 return std::nullopt;
     in >> std::ws;
     return in.eof() ? std::optional { named } : std::nullopt;

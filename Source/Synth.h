@@ -19,8 +19,11 @@ public:
 private:
     static constexpr int samples = 1024;
     static constexpr int bands = 9;
+    static constexpr int frameStride = bands * (samples + 1);
     const float* frame(int table, int index, int band) const noexcept;
+    float interpolateFixed(int table, float phase, int band) const noexcept;
     float interpolate(int table, float position, float phase, int band) const noexcept;
+    std::array<int, tableCount> tableOffsets {};
     std::vector<float> data;
 };
 
@@ -83,10 +86,11 @@ private:
         Controllers controls {};
         Env amp, filter;
         std::array<Filter, 2> filters {};
-        std::array<std::array<Layer, maxUnison>, 2> layers {};
-        std::array<float, 2> lfoPhases {}, tuning {}, position {}, targetTuning {}, targetPosition {};
-        std::array<int, 2> table {}, previousTable {};
-        std::array<float, 2> tableMix { 1.0f, 1.0f };
+        std::array<std::array<Layer, maxUnison>, oscillatorCount> layers {};
+        std::array<float, 2> lfoPhases {};
+        std::array<float, oscillatorCount> tuning {}, position {}, targetTuning {}, targetPosition {};
+        std::array<int, oscillatorCount> table {}, previousTable {};
+        std::array<float, oscillatorCount> tableMix {};
         float g = 0, damping = 0, targetG = 0, targetDamping = 0;
         float lastL = 0, lastR = 0;
     };
