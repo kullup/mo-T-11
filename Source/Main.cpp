@@ -10,18 +10,20 @@ public:
         : DocumentWindow("MO-T 11", juce::Colour(0xff252829), allButtons)
     {
         setUsingNativeTitleBar(true);
-        setContentOwned(new mot::Panel(audio, [this](int height) { updatePanelHeight(height); }), true);
+        auto* panel = new mot::Panel(audio, [this] { updatePanelSize(); });
+        setContentOwned(panel, true);
         setResizable(true, false);
-        setPanelAspectRatio(mot::Panel::compactHeight);
+        const auto design = panel->designSize();
+        setPanelAspectRatio(design);
         grip = std::make_unique<juce::ResizableCornerComponent>(this, getConstrainer());
         grip->setAlwaysOnTop(true);
         addAndMakeVisible(*grip);
         const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
-        int width = mot::Panel::designWidth;
+        int width = design.x;
         if (display != nullptr)
             width = juce::jmax(minWidth, juce::jmin(width, display->userArea.getWidth() - 60,
-                (display->userArea.getHeight() - 90) * mot::Panel::designWidth / mot::Panel::compactHeight));
-        centreWithSize(width, heightForWidth(width, mot::Panel::compactHeight));
+                (display->userArea.getHeight() - 90) * design.x / design.y));
+        centreWithSize(width, heightForWidth(width, design));
         setVisible(true);
     }
 
@@ -57,39 +59,40 @@ public:
             grip->setVisible(!maximized);
             grip->setBounds(getWidth() - 22, getHeight() - 22, 22, 22);
         }
-        if (!maximized && pendingPanelHeight != 0)
+        if (!maximized && pendingPanelSize)
             triggerAsyncUpdate();
     }
 
 private:
     static constexpr int minWidth = mot::Panel::designWidth * 3 / 4, maxWidth = 2400;
 
-    static int heightForWidth(int width, int designHeight)
+    static int heightForWidth(int width, juce::Point<int> design)
     {
-        return juce::roundToInt(width * static_cast<double>(designHeight) / mot::Panel::designWidth);
+        return juce::roundToInt(width * static_cast<double>(design.y) / design.x);
     }
 
-    void setPanelAspectRatio(int designHeight)
+    void setPanelAspectRatio(juce::Point<int> design)
     {
         if (auto* constrainer = getConstrainer())
         {
-            constrainer->setSizeLimits(minWidth, heightForWidth(minWidth, designHeight),
-                                       maxWidth, heightForWidth(maxWidth, designHeight));
-            constrainer->setFixedAspectRatio(static_cast<double>(mot::Panel::designWidth) / designHeight);
+            constrainer->setSizeLimits(minWidth, heightForWidth(minWidth, design),
+                                       maxWidth, heightForWidth(maxWidth, design));
+            constrainer->setFixedAspectRatio(static_cast<double>(design.x) / design.y);
         }
     }
 
-    void updatePanelHeight(int designHeight)
+    void updatePanelSize()
     {
         if (isFullScreen())
         {
             // Let the native window restore its previous bounds before changing its aspect ratio.
-            pendingPanelHeight = designHeight;
+            pendingPanelSize = true;
             return;
         }
 
-        pendingPanelHeight = 0;
-        setPanelAspectRatio(designHeight);
+        pendingPanelSize = false;
+        const auto design = performancePanel()->designSize();
+        setPanelAspectRatio(design);
         auto bounds = getBounds();
         if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect(bounds))
         {
@@ -97,25 +100,25 @@ private:
             const auto frame = frameSize ? *frameSize : juce::BorderSize<int>();
             const auto available = frame.subtractedFrom(display->userArea);
             const int fittingWidth = juce::jmin(available.getWidth(),
-                available.getHeight() * mot::Panel::designWidth / designHeight);
+                available.getHeight() * design.x / design.y);
             bounds.setWidth(juce::jmin(bounds.getWidth(), juce::jmax(minWidth, fittingWidth)));
-            bounds.setHeight(heightForWidth(bounds.getWidth(), designHeight));
+            bounds.setHeight(heightForWidth(bounds.getWidth(), design));
             bounds = bounds.constrainedWithin(available);
         }
         else
-            bounds.setHeight(heightForWidth(bounds.getWidth(), designHeight));
+            bounds.setHeight(heightForWidth(bounds.getWidth(), design));
         setBounds(bounds);
     }
 
     void handleAsyncUpdate() override
     {
-        if (pendingPanelHeight != 0)
-            updatePanelHeight(pendingPanelHeight);
+        if (pendingPanelSize)
+            updatePanelSize();
     }
 
     mot::Panel* performancePanel() const noexcept { return static_cast<mot::Panel*>(getContentComponent()); }
     std::unique_ptr<juce::ResizableCornerComponent> grip;
-    int pendingPanelHeight = 0;
+    bool pendingPanelSize = false;
 };
 
 class Application final : public juce::JUCEApplication

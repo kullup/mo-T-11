@@ -27,10 +27,11 @@ if(MOT_BUILD_APP)
         FetchContent_MakeAvailable(juce)
     endif()
 
-    juce_add_binary_data(mot_fonts SOURCES
+    juce_add_binary_data(mot_assets SOURCES
         Assets/Fonts/BarlowSemiCondensed-Medium.ttf
         Assets/Fonts/BarlowSemiCondensed-Bold.ttf
-        Assets/Fonts/OFL.txt)
+        Assets/Fonts/OFL.txt
+        Assets/Walnut.jpg)
 
     juce_add_gui_app(MOT11 PRODUCT_NAME "MO-T 11" BUNDLE_ID "org.mot11.synth")
     target_sources(MOT11 PRIVATE Source/Main.cpp Source/Standalone.cpp Source/Panel.cpp)
@@ -38,6 +39,6 @@ if(MOT_BUILD_APP)
     if(WIN32)
         target_compile_definitions(MOT11 PRIVATE JUCE_USE_WINRT_MIDI=1)
     endif()
-    target_link_libraries(MOT11 PRIVATE mot_core mot_fonts juce::juce_audio_devices
+    target_link_libraries(MOT11 PRIVATE mot_core mot_assets juce::juce_audio_devices
         juce::juce_gui_basics juce::juce_recommended_config_flags)
 endif()

@@ -11,6 +11,8 @@
 
 namespace mot
 {
+enum class PanelTheme { classic, classicDark, midnight };
+
 class Standalone final : public juce::AudioIODeviceCallback, private juce::Timer,
                          private juce::ChangeListener
 {
@@ -22,6 +24,8 @@ public:
 
     const WaveBank& waves() const noexcept { return waveBank; }
     const NamedPatch& patch() const noexcept { return current; }
+    PanelTheme panelTheme() const;
+    void setPanelTheme(PanelTheme theme);
     void apply(NamedPatch patch);
     bool load(const juce::File& file);
     bool save(const juce::File& file);

@@ -23,6 +23,17 @@ juce::PropertiesFile::Options settingsOptions()
     options.osxLibrarySubFolder = "Application Support";
     return options;
 }
+
+const char* panelThemeKey(PanelTheme theme)
+{
+    switch (theme)
+    {
+        case PanelTheme::classicDark: return "classic-dark";
+        case PanelTheme::midnight: return "midnight";
+        case PanelTheme::classic: return "classic";
+    }
+    return "classic";
+}
 }
 
 struct Standalone::Input final : public juce::MidiInputCallback
@@ -87,6 +98,20 @@ void Standalone::apply(NamedPatch patch)
     current = std::move(patch);
     patches.publish(current.sound);
     sessionDirty = true;
+}
+
+PanelTheme Standalone::panelTheme() const
+{
+    const auto stored = settings->getValue("panelTheme");
+    for (const auto theme : { PanelTheme::classicDark, PanelTheme::midnight })
+        if (stored == panelThemeKey(theme))
+            return theme;
+    return PanelTheme::classic;
+}
+
+void Standalone::setPanelTheme(PanelTheme theme)
+{
+    settings->setValue("panelTheme", panelThemeKey(theme));
 }
 
 bool Standalone::load(const juce::File& file)

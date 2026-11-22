@@ -11,8 +11,9 @@ class Panel final : public juce::Component
 {
 public:
     static constexpr int designWidth = 1408, designHeight = 800, compactHeight = 676;
-    Panel(Standalone& app, std::function<void(int)> onDesignHeightChanged);
+    Panel(Standalone& app, std::function<void()> onDesignSizeChanged);
     ~Panel() override;
+    juce::Point<int> designSize() const;
     bool playComputerKey(const juce::KeyPress&);
     bool releaseComputerKeys();
     void releasePerformanceKeys();
