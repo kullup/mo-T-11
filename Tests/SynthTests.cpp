@@ -345,6 +345,52 @@ void glideAndUnison(const WaveBank& bank)
           "Unison chord exceeded full scale");
 }
 
+void effects(const WaveBank& bank)
+{
+    Synth synth(bank);
+    auto patch = sinePatch();
+    patch.ampEnv = { 0.002f, 0.02f, 1.0f, 0.005f };
+    patch.tapeDelay = { true, 0.15f, 0.62f, 0.32f, 0.55f };
+    Event release { EventType::noteOff };
+    for (const int rate : { 44100, 96000 })
+    {
+        const auto samples = [rate](double time) { return static_cast<int>(rate * time); };
+        release.offset = samples(0.01);
+        synth.setPatch(patch);
+        synth.prepare(rate);
+        const Block note(synth, samples(0.02), { {}, release });
+        check(peak(note.left) > 0.02f && synth.activeVoices() == 0, "Tape delay removed the dry note");
+        check(peak(Block(synth, samples(0.10)).left) == 0.0f, "Tape echo arrived early");
+        const Block firstEcho(synth, samples(0.07));
+        check(peak(firstEcho.left) > 0.02f && peak(firstEcho.right) > 0.02f
+              && firstEcho.left != firstEcho.right, "Tape delay did not produce stereo echoes");
+        check(peak(Block(synth, samples(0.17)).left) > 0.005f, "Tape delay did not produce a feedback repeat");
+        check(peak(Block(synth, samples(0.5), { { EventType::panic } }).left) == 0.0f,
+              "Panic left tape delay repeats in the buffer");
+    }
+
+    patch.tapeDelay.enabled = false;
+    patch.reverb = { true, 0.85f, 0.30f, 0.60f };
+    synth.setPatch(patch);
+    synth.prepare(48000);
+    release.offset = 480;
+    Block(synth, 960, { {}, release });
+    const Block tail(synth, 24000);
+    check(peak(tail.left) > 0.005f && peak(tail.right) > 0.005f && tail.left != tail.right,
+          "Reverb did not ring out in stereo after the note ended");
+    check(peak(Block(synth, 24000, { { EventType::panic } }).left) == 0.0f, "Panic did not clear reverb");
+
+    Block(synth, 960, { {}, release });
+    Block(synth, 2400);
+    patch.reverb.enabled = false;
+    synth.setPatch(patch);
+    Block(synth, 9600);
+    check(peak(Block(synth, 4800).left) == 0.0f, "Bypass left reverb audible");
+    patch.reverb.enabled = true;
+    synth.setPatch(patch);
+    check(peak(Block(synth, 4800).left) == 0.0f, "Re-enabling reverb brought back a bypassed tail");
+}
+
 void patches()
 {
     for (const auto& preset : factoryPresets())
@@ -363,11 +409,12 @@ void patches()
     const auto decoded = decodePatch(encoded);
     check(decoded && encodePatch(*decoded) == encoded, "Custom patch failed round-trip");
     check(!decodePatch(encoded.substr(0, encoded.size() / 2)), "Truncated patch was accepted");
-    check(!decodePatch("MOT11 6" + encoded.substr(7)), "Unknown patch version was accepted");
+    check(!decodePatch("MOT11 7" + encoded.substr(7)), "Unknown patch version was accepted");
     check(!decodePatch(encoded + "junk"), "Unexpected trailing content was accepted");
     const auto voicing = encoded.find("VOICING ");
     const auto targets = encoded.find("TARGETS ", voicing);
     const auto matrix = encoded.find("MATRIX\n", targets);
+    const auto tape = encoded.find("TAPE_DELAY ", matrix);
     const auto third = encoded.find("OSC_C "), filter = encoded.find("FILTER ");
     const auto oldMatrix = [&](Destination last)
     {
@@ -383,6 +430,17 @@ void patches()
     };
     const auto legacy4 = decodePatch("MOT11 4" + encoded.substr(7, targets - 7) + oldMatrix(pitchC));
     check(legacy4 && encodePatch(*legacy4) == encoded, "Version 4 patch failed to migrate");
+    const auto legacy5 = decodePatch("MOT11 5" + encoded.substr(7, tape - 7));
+    check(legacy5 && encodePatch(*legacy5) == encoded, "Version 5 patch did not load with both effects bypassed");
+    custom.sound.tapeDelay = { true, maxTapeTime, maxTapeFeedback, 0.71f, 0.27f };
+    custom.sound.reverb = { true, 0.21f, 0.87f, 0.52f };
+    const auto withEffects = encodePatch(custom);
+    const auto decodedEffects = decodePatch(withEffects);
+    check(decodedEffects && encodePatch(*decodedEffects) == withEffects, "Effect settings failed round-trip");
+    check(!decodePatch(withEffects.substr(0, tape) + "TAPE_DELAY 1 0.32 1 0.8 0.1\nREVERB 1 1 0.9 1\n"),
+          "Out-of-range tape feedback was accepted");
+    custom.sound.tapeDelay = {};
+    custom.sound.reverb = {};
     auto migrated = custom;
     migrated.sound.osc[2] = Patch {}.osc[2];
     for (auto& row : migrated.sound.matrix)
@@ -427,6 +485,7 @@ int main()
         analogOscillators(bank);
         monoPlaying(bank);
         glideAndUnison(bank);
+        effects(bank);
         patches();
         std::cout << "MO-T 11 headless checks passed\n";
     }

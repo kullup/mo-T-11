@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Patch.h"
+#include "Effects.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -48,7 +48,7 @@ class Synth
 public:
     static constexpr int polyphony = 16;
     explicit Synth(const WaveBank& bank);
-    void prepare(double sampleRate) noexcept;
+    void prepare(double sampleRate);
     void setPatch(const Patch& patch) noexcept;
     void render(float* left, float* right, int samples, const Event* events, std::size_t count) noexcept;
     int activeVoices() const noexcept;
@@ -112,6 +112,7 @@ private:
 
     const WaveBank& waveBank;
     Patch patch;
+    Effects effects;
     std::array<Voice, polyphony> voices {};
     std::array<HeldNote, 256> heldNotes {};
     std::size_t heldCount = 0;

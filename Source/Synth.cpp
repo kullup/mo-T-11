@@ -243,9 +243,10 @@ float Synth::Filter::tick(float input, float a1, float a2, float a3, float k, Fi
 
 Synth::Synth(const WaveBank& bank) : waveBank(bank) { prepare(48000); }
 
-void Synth::prepare(double newRate) noexcept
+void Synth::prepare(double newRate)
 {
     rate = static_cast<float>(std::max(1.0, newRate));
+    effects.prepare(rate, patch);
     seconds = 1.0f / rate;
     smoothing = 1.0f - std::exp(-seconds / 0.006f);
     tableStep = seconds / 0.012f;
@@ -486,6 +487,7 @@ void Synth::event(const Event& e) noexcept
     if (e.type == EventType::panic)
     {
         for (auto& v : voices) retire(v);
+        effects.reset();
         heldCount = 0;
         return;
     }
@@ -626,10 +628,7 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
         for (std::size_t i = 0; i < globalPhases.size(); ++i)
             advance(globalPhases[i], patch.lfos[i].rate * seconds);
 
-        float mixL = tailL, mixR = tailR;
-        const float tailDecay = 1.0f - std::min(1.0f, seconds * 900.0f);
-        tailL = std::abs(tailL) < 1.0e-8f ? 0.0f : tailL * tailDecay;
-        tailR = std::abs(tailR) < 1.0e-8f ? 0.0f : tailR * tailDecay;
+        float mixL = 0.0f, mixR = 0.0f;
 
         for (auto& v : voices)
         {
@@ -696,6 +695,14 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
             mixL += v.lastL;
             mixR += v.lastR;
         }
+
+        effects.process(mixL, mixR, patch);
+        // Keep the de-click ramp dry so Panic cannot seed fresh echoes.
+        mixL += tailL;
+        mixR += tailR;
+        const float tailDecay = 1.0f - std::min(1.0f, seconds * 900.0f);
+        tailL = std::abs(tailL) < 1.0e-8f ? 0.0f : tailL * tailDecay;
+        tailR = std::abs(tailR) < 1.0e-8f ? 0.0f : tailR * tailDecay;
 
         const auto limit = [&](float value)
         {

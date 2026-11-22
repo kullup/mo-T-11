@@ -11,7 +11,7 @@ namespace mot
 namespace
 {
 constexpr std::array<const char*, oscillatorCount> oscillatorTags { "OSC_A", "OSC_B", "OSC_C" };
-constexpr int patchVersion = 5;
+constexpr int patchVersion = 6;
 constexpr int macroBranchVersion = 3;
 constexpr int thirdOscillatorVersion = 4;
 constexpr int legacyOscillatorCount = 2, legacyDestinationCount = 7;
@@ -154,6 +154,11 @@ std::string encodePatch(const NamedPatch& named)
             out << value << ' ';
         out << '\n';
     }
+    const auto& tape = p.tapeDelay;
+    const auto& reverb = p.reverb;
+    out << "TAPE_DELAY " << tape.enabled << ' ' << tape.time << ' ' << tape.feedback
+        << ' ' << tape.wear << ' ' << tape.mix << '\n';
+    out << "REVERB " << reverb.enabled << ' ' << reverb.size << ' ' << reverb.damping << ' ' << reverb.mix << '\n';
     return out.str();
 }
 
@@ -259,6 +264,16 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
         for (int i = 0; i < routesPerSource; ++i)
             if (!readRange(row[defaultMatrixColumn(static_cast<Destination>(i))], -1, 1))
                 return std::nullopt;
+    }
+    if (version >= 6)
+    {
+        auto& tape = p.tapeDelay;
+        auto& reverb = p.reverb;
+        if (!readTag("TAPE_DELAY") || !(in >> tape.enabled) || !readRange(tape.time, minTapeTime, maxTapeTime)
+            || !readRange(tape.feedback, 0, maxTapeFeedback) || !readRange(tape.wear, 0, 1)
+            || !readRange(tape.mix, 0, 1) || !readTag("REVERB") || !(in >> reverb.enabled)
+            || !readRange(reverb.size, 0, 1) || !readRange(reverb.damping, 0, 1) || !readRange(reverb.mix, 0, 1))
+            return std::nullopt;
     }
     in >> std::ws;
     return in.eof() ? std::optional { named } : std::nullopt;

@@ -14,6 +14,7 @@ constexpr int presetCount = 9;
 constexpr int maxUnison = 4;
 constexpr int maxOscillatorSemitones = 24;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
+constexpr float minTapeTime = 0.05f, maxTapeTime = 1.2f, maxTapeFeedback = 0.9f;
 
 enum Source { lfo1, lfo2, filterEnvelope, ampEnvelope, velocity, keyTrack, wheel, pressure };
 // Destination values are stored in patch files. Append new destinations before destinationCount.
@@ -85,6 +86,18 @@ struct Voicing
     float detune = 12.0f, width = 0.75f;
 };
 
+struct TapeDelaySettings
+{
+    bool enabled = false;
+    float time = 0.32f, feedback = 0.38f, wear = 0.32f, mix = 0.28f;
+};
+
+struct ReverbSettings
+{
+    bool enabled = false;
+    float size = 0.55f, damping = 0.42f, mix = 0.25f;
+};
+
 struct Patch
 {
     std::array<Oscillator, oscillatorCount> osc {
@@ -98,6 +111,8 @@ struct Patch
     std::array<Destination, matrixColumnCount> matrixTargets = defaultMatrixTargets;
     std::array<std::array<float, matrixColumnCount>, sourceCount> matrix {};
     Voicing voicing;
+    TapeDelaySettings tapeDelay;
+    ReverbSettings reverb;
 };
 
 struct NamedPatch { std::string name; Patch sound; };

@@ -536,6 +536,7 @@ public:
         createLfos();
         createMatrix();
         createVoicing();
+        createEffects();
         createKeyboard();
         setPerformanceVisible(false);
         syncControls();
@@ -576,8 +577,7 @@ public:
         const auto amountCaption = matrixAmountBounds.withY(matrixAmountBounds.getBottom() + 1).withHeight(15);
         label(g, "AMOUNT", amountCaption, 12.0f, ink, juce::Justification::centred, true);
         paintPlate(g, voicingPanel, "VOICING");
-        label(g, "PLAY MODE", { 36, 583, 246, 15 }, 11.5f, quiet, juce::Justification::centredLeft, true);
-        paintPlate(g, effectsPanel, {});
+        paintEffects(g);
         if (keys.isVisible()) paintPerformance(g);
         for (const auto& entry : sliders)
         {
@@ -611,8 +611,10 @@ private:
     inline static const Rectangle<int> envPanel { 655, 111, 210, 425 };
     inline static const Rectangle<int> lfoPanel { 875, 111, 169, 425 };
     inline static const Rectangle<int> matrixPanel { 1054, 111, panelRight - 1054, 425 };
-    inline static const Rectangle<int> voicingPanel { panelInset, 550, 623, 104 };
-    inline static const Rectangle<int> effectsPanel { 655, 550, panelRight - 655, 104 };
+    static constexpr int lowerPanelY = 550, voicingWidth = 403, effectsX = panelInset + voicingWidth + 10;
+    static constexpr int tapeX = effectsX + 13, reverbDivider = 929, reverbX = reverbDivider + 21;
+    inline static const Rectangle<int> voicingPanel { panelInset, lowerPanelY, voicingWidth, 104 };
+    inline static const Rectangle<int> effectsPanel { effectsX, lowerPanelY, panelRight - effectsX, 104 };
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
     inline static const std::array<const char*, oscillatorCount> oscillatorNames { "A", "B", "C" };
     enum OscillatorColumn { positionColumn, tuneColumn, fineColumn, volumeColumn };
@@ -726,6 +728,10 @@ private:
         phaseButton->setToggleState(osc.resetPhase, juce::dontSendNotification);
         for (std::size_t i = 0; i < modeButtons.size(); ++i)
             modeButtons[i]->setToggleState(static_cast<PlayMode>(i) == p.voicing.mode, juce::dontSendNotification);
+        tapeSwitch->setButtonText(p.tapeDelay.enabled ? "ON" : "BYPASS");
+        tapeSwitch->setToggleState(p.tapeDelay.enabled, juce::dontSendNotification);
+        reverbSwitch->setButtonText(p.reverb.enabled ? "ON" : "BYPASS");
+        reverbSwitch->setToggleState(p.reverb.enabled, juce::dontSendNotification);
         static constexpr const char* modes[] { "LP  /  LOW PASS", "BP  /  BAND PASS", "HP  /  HIGH PASS" };
         filterMode->setButtonText(modes[static_cast<int>(p.filterMode)]);
         static constexpr const char* shapes[] { "SINE", "TRI", "RAMP", "SQR" };
@@ -1037,29 +1043,66 @@ private:
         for (std::size_t i = 0; i < modeButtons.size(); ++i)
         {
             const auto mode = static_cast<PlayMode>(i);
-            modeButtons[i] = &button(modeNames[i], descriptions[i], { 36 + 86 * static_cast<int>(i), 601, 77, 31 },
-                                     [this, mode]
+            const Rectangle<int> bounds { panelInset + 13, lowerPanelY + 31 + 22 * static_cast<int>(i), 68, 20 };
+            modeButtons[i] = &button(modeNames[i], descriptions[i], bounds, [this, mode]
             {
                 if (audio.patch().sound.voicing.mode != mode)
                     edit([mode](Patch& p) { p.voicing.mode = mode; });
             });
         }
-        slider("Glide time between overlapping Mono or Legato notes", "GLIDE", { 317, 558, 62, 62 },
+        slider("Glide time between overlapping Mono or Legato notes", "GLIDE", lowerKnob(118),
                false, 0, maxGlide, 0.001,
                [](const Patch& p) { return p.voicing.glide; },
                [](Patch& p, double v) { p.voicing.glide = static_cast<float>(v); },
                [](double v) { return v == 0.0 ? String("Off") : seconds(v); }, 0.15);
-        slider("Unison layers per note", "UNISON", { 398, 558, 62, 62 }, false, 1, maxUnison, 1,
+        slider("Unison layers per note", "UNISON", lowerKnob(194), false, 1, maxUnison, 1,
                [](const Patch& p) { return p.voicing.unison; },
                [](Patch& p, double v) { p.voicing.unison = static_cast<int>(v); },
                [](double v) { return String(static_cast<int>(v)) + "x"; });
-        slider("Unison detune in cents", "DETUNE", { 479, 558, 62, 62 }, false, 0, maxUnisonDetune, 1,
+        slider("Unison detune in cents", "DETUNE", lowerKnob(270), false, 0, maxUnisonDetune, 1,
                [](const Patch& p) { return p.voicing.detune; },
                [](Patch& p, double v) { p.voicing.detune = static_cast<float>(v); },
                [](double v) { return String(juce::roundToInt(v)) + " ct"; });
-        slider("Unison stereo width", "WIDTH", { 560, 558, 62, 62 }, false, 0, 1, 0.01,
+        slider("Unison stereo width", "WIDTH", lowerKnob(346), false, 0, 1, 0.01,
                [](const Patch& p) { return p.voicing.width; },
                [](Patch& p, double v) { p.voicing.width = static_cast<float>(v); }, percent);
+    }
+
+    static Rectangle<int> lowerKnob(int x) { return { x, lowerPanelY + 8, 62, 62 }; }
+
+    template <typename Settings>
+    juce::Slider& effectKnob(Settings Patch::* effect, float Settings::* member, const String& name,
+                            const String& caption, int x, double min = 0.0, double max = 1.0,
+                            double step = 0.01, Format format = percent, double midpoint = 0.0)
+    {
+        return slider(name, caption, lowerKnob(x), false, min, max, step,
+                      [=](const Patch& p) { return (p.*effect).*member; },
+                      [=](Patch& p, double v) { (p.*effect).*member = static_cast<float>(v); },
+                      std::move(format), midpoint);
+    }
+
+    void createEffects()
+    {
+        tapeSwitch = &button({}, "Toggle tape delay", { tapeX, lowerPanelY + 59, 92, 27 }, [this]
+        {
+            edit([](Patch& p) { p.tapeDelay.enabled = !p.tapeDelay.enabled; });
+        });
+        effectKnob(&Patch::tapeDelay, &TapeDelaySettings::time, "Tape delay time", "TIME",
+                   574, minTapeTime, maxTapeTime, 0.001, seconds, 0.32);
+        effectKnob(&Patch::tapeDelay, &TapeDelaySettings::feedback, "Tape delay feedback", "FEEDBACK",
+                   655, 0, maxTapeFeedback);
+        effectKnob(&Patch::tapeDelay, &TapeDelaySettings::wear, "Tape wear, pitch drift and tone", "WEAR", 736);
+        auto& tapeMix = effectKnob(&Patch::tapeDelay, &TapeDelaySettings::mix, "Tape delay wet mix", "MIX", 817);
+        tapeMix.setColour(juce::Slider::thumbColourId, mark);
+
+        reverbSwitch = &button({}, "Toggle reverb", { reverbX, lowerPanelY + 59, 92, 27 }, [this]
+        {
+            edit([](Patch& p) { p.reverb.enabled = !p.reverb.enabled; });
+        });
+        effectKnob(&Patch::reverb, &ReverbSettings::size, "Reverb size and decay", "SIZE", 1064);
+        effectKnob(&Patch::reverb, &ReverbSettings::damping, "Reverb high-frequency damping", "DAMP", 1168);
+        auto& reverbMix = effectKnob(&Patch::reverb, &ReverbSettings::mix, "Reverb wet mix", "MIX", 1272);
+        reverbMix.setColour(juce::Slider::thumbColourId, blue);
     }
 
     void createKeyboard()
@@ -1245,6 +1288,19 @@ private:
         if (heading.isNotEmpty())
             label(g, heading, { area.getX() + 13, area.getY() + 10, area.getWidth() - 26, 20 }, 17.0f, ink,
                   juce::Justification::centredLeft, true);
+    }
+
+    void paintEffects(Graphics& g) const
+    {
+        paintPlate(g, effectsPanel, "EFFECTS");
+        g.setColour(line);
+        g.drawVerticalLine(reverbDivider, lowerPanelY + 13.0f, effectsPanel.getBottom() - 13.0f);
+        const auto bankLabel = [&](const String& name, int x)
+        {
+            label(g, name, { x, lowerPanelY + 35, 108, 20 }, 14.5f, ink, juce::Justification::centredLeft, true);
+        };
+        bankLabel("TAPE DELAY", tapeX);
+        bankLabel("REVERB", reverbX);
     }
 
     void paintHeader(Graphics& g) const
@@ -1437,6 +1493,8 @@ private:
     juce::TextButton* matrixAdd = nullptr;
     juce::TextButton* matrixTarget = nullptr;
     juce::TextButton* matrixClear = nullptr;
+    juce::TextButton* tapeSwitch = nullptr;
+    juce::TextButton* reverbSwitch = nullptr;
     juce::Slider* masterVolume = nullptr;
     juce::Slider* matrixAmountKnob = nullptr;
     int engine = 0, octave = 4, presetSlot = -1;

@@ -4,7 +4,7 @@ project(MOT11 VERSION 0.1.1 LANGUAGES C CXX)
 option(MOT_BUILD_APP "Build the JUCE desktop instrument" ON)
 set(MOT_JUCE_DIR "" CACHE PATH "Path to an optional local JUCE 8.0.12 checkout")
 
-add_library(mot_core STATIC Source/Patch.cpp Source/Synth.cpp)
+add_library(mot_core STATIC Source/Effects.cpp Source/Patch.cpp Source/Synth.cpp)
 target_include_directories(mot_core PUBLIC Source)
 target_compile_features(mot_core PUBLIC cxx_std_17)
 set_target_properties(mot_core PROPERTIES CXX_EXTENSIONS OFF)
