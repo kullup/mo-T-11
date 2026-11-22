@@ -92,6 +92,27 @@ String seconds(double value)
     return value >= 1 ? String(value, 2) + " s" : String(juce::roundToInt(value * 1000.0)) + " ms";
 }
 
+constexpr std::array<const char*, 4> encoderModeNames { "Absolute", "Relative 1", "Relative 2", "Relative 3" };
+
+String macroTargetName(const MacroTarget& target)
+{
+    return String(macroGroupNames[static_cast<int>(target.group)]) + " " + target.name;
+}
+
+String macroTargetValue(const MacroTarget& target, double value)
+{
+    switch (target.unit)
+    {
+        case MacroUnit::pan:
+            return std::abs(value) < 0.005 ? String("C") : String(value < 0.0 ? "L " : "R ") + percent(std::abs(value));
+        case MacroUnit::cents:     return signedValue(juce::roundToInt(value), " ct");
+        case MacroUnit::time:      return value == 0.0 ? String("Off") : seconds(value);
+        case MacroUnit::frequency: return String(value, 2) + " Hz";
+        case MacroUnit::cutoff:    return hz(value);
+        default:                   return percent(value);
+    }
+}
+
 class Skin final : public juce::LookAndFeel_V4
 {
 public:
@@ -379,7 +400,7 @@ private:
 };
 }
 
-class Panel::Surface final : public juce::Component, private juce::Timer
+class Panel::Surface final : public juce::Component, private juce::Timer, private juce::ListBoxModel
 {
 public:
     explicit Surface(Standalone& instrument) : audio(instrument), keys(audio)
@@ -392,9 +413,10 @@ public:
         createEnvelopes();
         createLfos();
         createMatrix();
+        createMacros();
         createVoicing();
         createKeyboard();
-        syncControls();
+        showMacroEditor(-1);
 
         const auto& presets = factoryPresets();
         for (int slot = 0; slot < presetCount; ++slot)
@@ -407,6 +429,7 @@ public:
     ~Surface() override
     {
         stopTimer();
+        macroList.setModel(nullptr);
         keys.release();
         setLookAndFeel(nullptr);
     }
@@ -431,12 +454,16 @@ public:
         if (g.clipRegionIntersects(waveDisplay))
             paintWavetable(g);
         paintLfoAndEnvelope(g);
-        paintMatrix(g);
+        if (macroEditor >= 0)
+            paintMacroEditor(g);
+        else
+            paintMatrix(g);
+        paintMacroStrip(g);
         paintVoicing(g);
         paintPerformance(g);
         for (const auto& entry : sliders)
         {
-            if (entry.caption.isEmpty()) continue;
+            if (entry.caption.isEmpty() || !entry.control->isVisible()) continue;
             const auto area = entry.control->getBounds();
             const auto width = std::max(area.getWidth(), entry.fader ? 41 : 58);
             const int centre = area.getCentreX();
@@ -464,12 +491,12 @@ private:
     inline static const Rectangle<int> filterPanel { 507, 111, 138, 425 };
     inline static const Rectangle<int> envPanel { 655, 111, 210, 425 };
     inline static const Rectangle<int> lfoPanel { 875, 111, 169, 425 };
-    inline static const Rectangle<int> matrixPanel { 1054, 111, 364, 425 };
-    inline static const Rectangle<int> voicingPanel { 22, 550, 1396, 104 };
+    inline static const Rectangle<int> matrixPanel { 1054, 111, 364, 543 };
+    inline static const Rectangle<int> voicingPanel { 22, 550, 1022, 104 };
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
     inline static const Rectangle<int> waveDisplay { 100, 195, 266, 198 };
     inline static const Rectangle<int> amountDisplay { 1069, 156, 334, 57 };
-    inline static const Rectangle<int> modeDisplay { 312, 570, 299, 62 };
+    inline static const Rectangle<int> modeDisplay { 312, 570, 246, 62 };
     inline static const Rectangle<int> performanceStatus { 117, 683, 267, 84 };
     inline static const std::array<const char*, 3> modeNames { "POLY", "MONO", "LEGATO" };
 
@@ -533,24 +560,28 @@ private:
     template <typename T>
     void edit(T change)
     {
-        auto next = audio.patch();
-        change(next.sound);
-        audio.apply(std::move(next));
+        auto next = audio.patch().sound;
+        change(next);
+        audio.updatePatch(std::move(next));
         edited = true;
         syncControls();
     }
 
     void syncControls()
     {
+        syncedRevision = audio.revision();
+        edited = edited || audio.changedByMidi();
         const auto& p = audio.patch().sound;
         const auto& osc = p.osc[engine];
+        syncMacros();
         for (const auto& entry : sliders)
         {
             auto& control = *entry.control;
             const auto amount = entry.read(p);
             control.setValue(amount, juce::dontSendNotification);
             control.setTooltip(control.getName() + "  " + control.getTextFromValue(amount));
-            control.setDoubleClickReturnValue(true, entry.read(factoryPresets().front().sound));
+            if (&control != macroEndpoints[0] && &control != macroEndpoints[1])
+                control.setDoubleClickReturnValue(true, entry.read(factoryPresets().front().sound));
         }
         engineButtons[0]->setToggleState(engine == 0, juce::dontSendNotification);
         engineButtons[1]->setToggleState(engine == 1, juce::dontSendNotification);
@@ -719,10 +750,263 @@ private:
         const auto format = [](double v) { return signedValue(juce::roundToInt(v * 100), "%"); };
         auto& fine = slider("Matrix fine amount", "FINE", { 1349, 244, 54, 54 }, false, -1, 1, 0.01, read, write, format);
         fine.setMouseDragSensitivity(710);
-        slider("Matrix amount fader", {}, { 1359, 338, 34, 144 }, true, -1, 1, 0.01, read, write, format);
-        button("CLEAR", "Clear selected matrix route", { 1347, 493, 56, 26 }, [this, write]
+        auto& amount = slider("Matrix amount fader", {}, { 1359, 338, 34, 144 }, true, -1, 1, 0.01, read, write, format);
+        auto& clear = button("CLEAR", "Clear selected matrix route", { 1347, 493, 56, 26 }, [this, write]
         {
             edit([&](Patch& p) { write(p, 0.0); });
+        });
+        matrixAdjustments = { &fine, &amount, &clear };
+    }
+
+    void createMacros()
+    {
+        for (int i = 0; i < macroCount; ++i)
+        {
+            const int x = 1069 + i * 171;
+            const String title = "Macro " + String(i + 1);
+            slider(title, {}, { x + 3, 574, 61, 65 }, false, 0, 1, 0.0001,
+                   [i](const Patch& p) { return p.macros[i].value; },
+                   [i](Patch& p, double value) { moveMacro(p, i, static_cast<float>(value)); }, percent);
+            macroEditButtons[i] = &button("EDIT", "Edit " + title + " targets", { x + 66, 598, 43, 23 },
+                                          [this, i] { showMacroEditor(macroEditor == i ? -1 : i); });
+            macroLearnButtons[i] = &button("LEARN", "Learn MIDI CC for " + title, { x + 113, 598, 50, 23 },
+                                           [this, i]
+            {
+                audio.toggleMacroLearn(i);
+                syncControls();
+            });
+        }
+
+        macroList.setModel(this);
+        macroList.setColour(juce::ListBox::backgroundColourId, Colour(0xffdedbd0));
+        macroList.setColour(juce::ListBox::outlineColourId, line);
+        macroList.setOutlineThickness(1);
+        macroList.setRowHeight(25);
+        macroList.setBounds(1069, 241, 334, 127);
+        addChildComponent(macroList);
+        auto& back = button("MATRIX", "Return to the modulation matrix", { 1323, 120, 80, 27 },
+                            [this] { showMacroEditor(-1); });
+        auto& add = button("ADD TARGET", "Choose a parameter for this macro", { 1069, 378, 116, 27 },
+                           [this] { showMacroTargets(); });
+        addMacroButton = &add;
+        removeMacroButton = &button("REMOVE", "Remove selected macro target", { 1194, 378, 100, 27 }, [this]
+        {
+            if (macroEditor >= 0 && macroTarget >= 0)
+                edit([&](Patch& p) { p.macros[macroEditor].ranges[macroTarget].reset(); });
+        });
+        reverseMacroButton = &button("REVERSE", "Swap the selected target's endpoints", { 1303, 378, 100, 27 }, [this]
+        {
+            editMacroRange([](MacroRange& range) { std::swap(range.start, range.end); });
+        });
+
+        for (int i = 0; i < 2; ++i)
+        {
+            macroEndpoints[i] = &slider(i == 0 ? "Value at macro 0%" : "Value at macro 100%",
+                                        i == 0 ? "0% END" : "100% END",
+                                        { 1124 + i * 163, 410, 61, 61 }, false, 0, 1, 0.001,
+                [this, i](const Patch& p) -> double
+                {
+                    if (macroEditor < 0 || macroTarget < 0) return 0.0;
+                    const auto& range = p.macros[macroEditor].ranges[macroTarget];
+                    return range ? (i == 0 ? range->start : range->end) : 0.0;
+                },
+                [this, i](Patch& p, double value)
+                {
+                    if (macroEditor < 0 || macroTarget < 0) return;
+                    auto range = *p.macros[macroEditor].ranges[macroTarget];
+                    (i == 0 ? range.start : range.end) = static_cast<float>(value);
+                    setMacroRange(p, macroEditor, macroTarget, range);
+                },
+                [this](double value)
+                {
+                    return macroTarget >= 0 ? macroTargetValue(macroTargets()[macroTarget], value) : String();
+                });
+            macroEndpoints[i]->setDoubleClickReturnValue(false, 0.0);
+        }
+
+        encoderModeButton = &button("ABSOLUTE", "Select MIDI encoder response", { 1069, 506, 140, 24 },
+                                    [this] { showEncoderModes(); });
+        unlearnMacroButton = &button("UNLEARN", "Remove the MIDI binding for this macro", { 1304, 506, 99, 24 },
+                                     [this]
+        {
+            if (macroEditor < 0) return;
+            audio.clearMacroMidi(macroEditor);
+            syncControls();
+        });
+        macroEditorControls = { &macroList, &back, &add, removeMacroButton, reverseMacroButton,
+                                encoderModeButton, unlearnMacroButton };
+    }
+
+    void showMacroEditor(int index)
+    {
+        macroEditor = index;
+        macroTarget = -1;
+        const bool editingMacro = index >= 0;
+        for (auto& row : matrix)
+            for (auto& cell : row)
+                cell->setVisible(!editingMacro);
+        for (auto* control : matrixAdjustments)
+            control->setVisible(!editingMacro);
+        for (auto* control : macroEditorControls)
+            control->setVisible(editingMacro);
+        syncControls();
+    }
+
+    void syncMacros()
+    {
+        for (int i = 0; i < macroCount; ++i)
+        {
+            macroMidi[i] = audio.macroMidiStatus(i);
+            macroEditButtons[i]->setToggleState(i == macroEditor, juce::dontSendNotification);
+            auto& learn = *macroLearnButtons[i];
+            learn.setButtonText(macroMidi[i].learning ? "CANCEL" : "LEARN");
+            learn.setToggleState(macroMidi[i].learning, juce::dontSendNotification);
+            learn.setTooltip(macroMidi[i].learning ? "Cancel MIDI Learn" : "Click and turn a MIDI knob");
+        }
+        if (macroEditor >= 0)
+        {
+            const auto& midi = macroMidi[macroEditor];
+            encoderModeButton->setButtonText("MIDI " + String(encoderModeNames[static_cast<int>(midi.mode)]).toUpperCase());
+            unlearnMacroButton->setEnabled(midi.channel > 0 || midi.learning);
+            std::vector<int> assigned;
+            const auto& ranges = audio.patch().sound.macros[macroEditor].ranges;
+            for (int i = 0; i < macroTargetCount; ++i)
+                if (ranges[i]) assigned.push_back(i);
+
+            if (assigned != macroRows || (macroTarget < 0 && !assigned.empty()))
+            {
+                syncingMacroList = true;
+                macroRows = std::move(assigned);
+                macroList.updateContent();
+                auto selected = std::find(macroRows.begin(), macroRows.end(), macroTarget);
+                if (selected == macroRows.end()) selected = macroRows.begin();
+                macroTarget = selected != macroRows.end() ? *selected : -1;
+                if (macroTarget >= 0)
+                    macroList.selectRow(static_cast<int>(selected - macroRows.begin()));
+                else
+                    macroList.deselectAllRows();
+                syncingMacroList = false;
+            }
+            macroList.repaint();
+            addMacroButton->setEnabled(static_cast<int>(macroRows.size()) < macroTargetCount);
+        }
+
+        const bool hasTarget = macroEditor >= 0 && macroTarget >= 0;
+        removeMacroButton->setEnabled(hasTarget);
+        reverseMacroButton->setEnabled(hasTarget);
+        for (auto* knob : macroEndpoints)
+            knob->setVisible(hasTarget);
+        if (!hasTarget || configuredMacroTarget == macroTarget)
+            return;
+        const auto& target = macroTargets()[macroTarget];
+        const double step = target.unit == MacroUnit::cutoff ? 1.0
+            : target.unit == MacroUnit::cents ? 0.1 : target.unit == MacroUnit::frequency ? 0.01 : 0.001;
+        for (auto* knob : macroEndpoints)
+        {
+            // Anchor exact limits even when the lower limit originated as a float.
+            const double minimum = std::round(target.min * 1000.0) / 1000.0;
+            knob->setRange(minimum, target.max, step);
+            knob->setSkewFactor(1.0);
+            if (target.unit == MacroUnit::cutoff) knob->setSkewFactorFromMidPoint(1200.0);
+            if (target.unit == MacroUnit::frequency) knob->setSkewFactorFromMidPoint(1.5);
+            if (target.unit == MacroUnit::time) knob->setSkewFactorFromMidPoint(0.25);
+        }
+        configuredMacroTarget = macroTarget;
+    }
+
+    template <typename T>
+    void editMacroRange(T change)
+    {
+        if (macroEditor < 0 || macroTarget < 0) return;
+        edit([&](Patch& p)
+        {
+            auto range = *p.macros[macroEditor].ranges[macroTarget];
+            change(range);
+            setMacroRange(p, macroEditor, macroTarget, range);
+        });
+    }
+
+    int getNumRows() override { return static_cast<int>(macroRows.size()); }
+
+    void paintListBoxItem(int row, Graphics& g, int width, int height, bool selected) override
+    {
+        if (macroEditor < 0 || row < 0 || row >= getNumRows()) return;
+        const auto index = macroRows[static_cast<std::size_t>(row)];
+        const auto& range = audio.patch().sound.macros[macroEditor].ranges[index];
+        if (!range) return;
+        const auto colour = selected ? steel : ink;
+        g.fillAll(selected ? blue : row % 2 == 0 ? plate : Colour(0xffdedbd0));
+        const int end = std::min(width, 316);
+        const auto& target = macroTargets()[index];
+        label(g, macroTargetName(target), { 8, 0, end - 145, height }, 12.5f, colour);
+        label(g, macroTargetValue(target, range->start), { end - 142, 0, 64, height }, 12.5f, colour,
+              juce::Justification::centredRight);
+        label(g, macroTargetValue(target, range->end), { end - 69, 0, 64, height }, 12.5f, colour,
+              juce::Justification::centredRight);
+    }
+
+    String getNameForRow(int row) override
+    {
+        return row >= 0 && row < getNumRows() ? macroTargetName(macroTargets()[macroRows[row]]) : String();
+    }
+
+    void selectedRowsChanged(int row) override
+    {
+        if (syncingMacroList || macroEditor < 0 || row < 0 || row >= getNumRows())
+            return;
+        macroTarget = macroRows[static_cast<std::size_t>(row)];
+        syncControls();
+    }
+
+    void showMacroTargets()
+    {
+        if (macroEditor < 0) return;
+        const int index = macroEditor;
+        juce::PopupMenu menu;
+        const auto& ranges = audio.patch().sound.macros[index].ranges;
+        for (int group = 0; group < static_cast<int>(macroGroupNames.size()); ++group)
+        {
+            juce::PopupMenu items;
+            for (int i = 0; i < macroTargetCount; ++i)
+            {
+                const auto& target = macroTargets()[i];
+                if (static_cast<int>(target.group) == group)
+                    items.addItem(i + 1, target.name, !ranges[i], ranges[i].has_value());
+            }
+            menu.addSubMenu(macroGroupNames[group], items);
+        }
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(addMacroButton),
+            [safe = SafePointer<Surface>(this), index](int id)
+        {
+            if (safe == nullptr || safe->macroEditor != index || id <= 0 || id > macroTargetCount) return;
+            safe->macroTarget = id - 1;
+            safe->edit([&](Patch& p)
+            {
+                const auto& target = macroTargets()[id - 1];
+                const float current = target.parameter(p);
+                auto& macro = p.macros[index];
+                float end = current;
+                if (macro.value == 0.0f)
+                    end = current < target.max ? target.max : target.min;
+                macro.ranges[id - 1] = MacroRange { current, end };
+            });
+        });
+    }
+
+    void showEncoderModes()
+    {
+        if (macroEditor < 0) return;
+        const int index = macroEditor;
+        const auto mode = macroMidi[index].mode;
+        juce::PopupMenu menu;
+        for (int i = 0; i < static_cast<int>(encoderModeNames.size()); ++i)
+            menu.addItem(i + 1, encoderModeNames[i], true, i == static_cast<int>(mode));
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(encoderModeButton),
+            [safe = SafePointer<Surface>(this), index](int id)
+        {
+            if (safe == nullptr || id <= 0 || id > static_cast<int>(encoderModeNames.size())) return;
+            safe->audio.setMacroEncoderMode(index, static_cast<EncoderMode>(id - 1));
+            safe->syncControls();
         });
     }
 
@@ -741,20 +1025,20 @@ private:
                     edit([mode](Patch& p) { p.voicing.mode = mode; });
             });
         }
-        slider("Glide time between overlapping Mono or Legato notes", "GLIDE", { 698, 558, 62, 62 },
+        slider("Glide time between overlapping Mono or Legato notes", "GLIDE", { 576, 558, 62, 62 },
                false, 0, maxGlide, 0.001,
                [](const Patch& p) { return p.voicing.glide; },
                [](Patch& p, double v) { p.voicing.glide = static_cast<float>(v); },
                [](double v) { return v == 0.0 ? String("Off") : seconds(v); }, 0.15);
-        slider("Unison layers per note", "UNISON", { 878, 558, 62, 62 }, false, 1, maxUnison, 1,
+        slider("Unison layers per note", "UNISON", { 704, 558, 62, 62 }, false, 1, maxUnison, 1,
                [](const Patch& p) { return p.voicing.unison; },
                [](Patch& p, double v) { p.voicing.unison = static_cast<int>(v); },
                [](double v) { return String(static_cast<int>(v)) + "x"; });
-        slider("Unison detune in cents", "DETUNE", { 1067, 558, 62, 62 }, false, 0, maxUnisonDetune, 1,
+        slider("Unison detune in cents", "DETUNE", { 826, 558, 62, 62 }, false, 0, maxUnisonDetune, 1,
                [](const Patch& p) { return p.voicing.detune; },
                [](Patch& p, double v) { p.voicing.detune = static_cast<float>(v); },
                [](double v) { return String(juce::roundToInt(v)) + " ct"; });
-        slider("Unison stereo width", "WIDTH", { 1256, 558, 62, 62 }, false, 0, 1, 0.01,
+        slider("Unison stereo width", "WIDTH", { 948, 558, 62, 62 }, false, 0, 1, 0.01,
                [](const Patch& p) { return p.voicing.width; },
                [](Patch& p, double v) { p.voicing.width = static_cast<float>(v); }, percent);
     }
@@ -897,6 +1181,8 @@ private:
 
     void timerCallback() override
     {
+        if (syncedRevision != audio.revision())
+            syncControls();
         repaint(1100, 35, 185, 55);
         repaint(performanceStatus);
     }
@@ -1040,6 +1326,50 @@ private:
         label(g, "AMOUNT", { 1341, 324, 68, 15 }, 10.5f, quiet, juce::Justification::centred, true);
     }
 
+    void paintMacroEditor(Graphics& g) const
+    {
+        display(g, amountDisplay);
+        const auto& macro = audio.patch().sound.macros[macroEditor];
+        pixels(g, "MACRO " + String(macroEditor + 1) + " / ASSIGN", 1083, 169, 1, amber.withAlpha(0.70f));
+        pixels(g, macroTarget < 0 ? String("CHOOSE A TARGET") : macroTargetName(macroTargets()[macroTarget]),
+               1083, 187, 1, amber);
+        const auto value = percent(macro.value);
+        pixels(g, value, 1389 - value.length() * 18, 176, 3, amber);
+
+        label(g, "PARAMETER", { 1078, 217, 162, 21 }, 11.5f, quiet, juce::Justification::centredLeft, true);
+        label(g, "0%", { 1249, 217, 60, 21 }, 11.5f, quiet, juce::Justification::centredRight, true);
+        label(g, "100%", { 1322, 217, 60, 21 }, 11.5f, quiet, juce::Justification::centredRight, true);
+        g.setColour(line);
+        g.drawHorizontalLine(500, 1069.0f, 1403.0f);
+    }
+
+    void paintMacroStrip(Graphics& g) const
+    {
+        g.setColour(line);
+        g.drawHorizontalLine(536, 1069.0f, 1403.0f);
+        label(g, "PERFORMANCE MACROS", { 1069, 543, 334, 23 }, 13.0f, blue,
+              juce::Justification::centredLeft, true);
+        const auto& macros = audio.patch().sound.macros;
+        for (int i = 0; i < macroCount; ++i)
+        {
+            const int x = 1069 + i * 171;
+            const Rectangle<float> face { static_cast<float>(x), 568.0f, 163.0f, 72.0f };
+            g.setColour(chassis);
+            g.fillRoundedRectangle(face, 4.5f);
+            g.setColour(line);
+            g.drawRoundedRectangle(face.reduced(0.5f), 4.5f, 1.0f);
+            label(g, "MACRO " + String(i + 1), { x + 66, 575, 60, 16 }, 11.5f, ink,
+                  juce::Justification::centredLeft, true);
+            const auto amount = percent(macros[i].value);
+            pixels(g, amount, x + 160 - amount.length() * 6, 580, 1, mark);
+            const auto& midi = macroMidi[i];
+            const auto status = midi.learning ? String("MOVE MIDI KNOB") : midi.channel > 0
+                ? "CH " + String(midi.channel) + " / CC " + String(midi.cc)
+                : String("MIDI UNASSIGNED");
+            pixels(g, status, x + 66, 627, 1, midi.learning ? mark : quiet);
+        }
+    }
+
     void paintVoicing(Graphics& g) const
     {
         paintPlate(g, voicingPanel, "VOICING");
@@ -1051,8 +1381,7 @@ private:
         pixels(g, modeNames[mode], 328, 582, 2, amber);
         pixels(g, details[mode], 328, 610, 1, amber.withAlpha(0.72f));
         g.setColour(line);
-        for (int x : { 638, 815 })
-            g.drawVerticalLine(x, 569.0f, 636.0f);
+        g.drawVerticalLine(670, 569.0f, 636.0f);
     }
 
     void paintPerformance(Graphics& g) const
@@ -1084,6 +1413,21 @@ private:
     std::vector<std::unique_ptr<juce::TextButton>> buttons;
     std::vector<BoundSlider> sliders;
     std::array<std::array<std::unique_ptr<MatrixCell>, destinationCount>, sourceCount> matrix;
+    juce::ListBox macroList { "Macro targets" };
+    std::vector<int> macroRows;
+    std::array<juce::Component*, 3> matrixAdjustments {};
+    std::array<juce::Component*, 7> macroEditorControls {};
+    std::array<Standalone::MacroMidiStatus, macroCount> macroMidi {};
+    std::array<juce::TextButton*, macroCount> macroEditButtons {}, macroLearnButtons {};
+    std::array<juce::Slider*, 2> macroEndpoints {};
+    juce::TextButton* addMacroButton = nullptr;
+    juce::TextButton* removeMacroButton = nullptr;
+    juce::TextButton* reverseMacroButton = nullptr;
+    juce::TextButton* encoderModeButton = nullptr;
+    juce::TextButton* unlearnMacroButton = nullptr;
+    int macroEditor = -1, macroTarget = -1, configuredMacroTarget = -1;
+    bool syncingMacroList = false;
+    unsigned syncedRevision = 0;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::File fileDirectory;
     std::array<juce::TextButton*, 2> engineButtons {}, shapeButtons {}, lfoModeButtons {};

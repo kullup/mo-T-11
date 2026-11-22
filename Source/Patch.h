@@ -11,6 +11,8 @@ constexpr int tableCount = 6;
 constexpr int sourceCount = 8;
 constexpr int destinationCount = 7;
 constexpr int presetCount = 8;
+constexpr int macroCount = 2;
+constexpr int macroTargetCount = 27;
 constexpr int maxUnison = 4;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 
@@ -56,6 +58,14 @@ struct Voicing
     float detune = 12.0f, width = 0.75f;
 };
 
+struct MacroRange { float start, end; };
+
+struct Macro
+{
+    float value = 0.0f;
+    std::array<std::optional<MacroRange>, macroTargetCount> ranges {};
+};
+
 struct Patch
 {
     std::array<Oscillator, 2> osc { Oscillator {}, Oscillator { 0, 0.6f, 0.0f } };
@@ -66,10 +76,32 @@ struct Patch
     std::array<Lfo, 2> lfos { Lfo {}, Lfo { 0.37f, 1.0f, Shape::triangle, false } };
     std::array<std::array<float, destinationCount>, sourceCount> matrix {};
     Voicing voicing;
+    std::array<Macro, macroCount> macros {};
+};
+
+enum class MacroGroup { oscA, oscB, filter, filterEnv, ampEnv, lfo1, lfo2, voicing, output };
+enum class MacroUnit { percent, pan, cents, time, frequency, cutoff };
+enum class EncoderMode { absolute, relative1, relative2, relative3 };
+
+inline constexpr std::array<const char*, 9> macroGroupNames {
+    "Oscillator A", "Oscillator B", "Filter", "Filter Env", "Amp Env", "LFO 1", "LFO 2", "Voicing", "Output"
+};
+
+struct MacroTarget
+{
+    MacroGroup group;
+    const char* name;
+    MacroUnit unit;
+    float min, max;
+    float& (*parameter)(Patch&);
 };
 
 struct NamedPatch { std::string name; Patch sound; };
 
+const std::array<MacroTarget, macroTargetCount>& macroTargets() noexcept;
+void moveMacro(Patch&, int macro, float value) noexcept;
+void setMacroRange(Patch&, int macro, int target, MacroRange) noexcept;
+std::optional<float> encoderValue(EncoderMode, int ccValue, float current) noexcept;
 const std::array<NamedPatch, presetCount>& factoryPresets();
 std::string encodePatch(const NamedPatch& patch);
 std::optional<NamedPatch> decodePatch(std::string_view data);

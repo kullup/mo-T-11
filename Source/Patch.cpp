@@ -1,5 +1,6 @@
 #include "Patch.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -8,6 +9,96 @@
 
 namespace mot
 {
+const std::array<MacroTarget, macroTargetCount>& macroTargets() noexcept
+{
+    using Group = MacroGroup;
+    using Unit = MacroUnit;
+    // The patch format stores these indices. Append new destinations at the end.
+    static constexpr std::array<MacroTarget, macroTargetCount> targets {{
+        { Group::oscA, "Position", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.osc[0].position; } },
+        { Group::oscA, "Level", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.osc[0].level; } },
+        { Group::oscA, "Fine", Unit::cents, -50, 50, [](Patch& p) -> float& { return p.osc[0].fine; } },
+        { Group::oscA, "Pan", Unit::pan, -1, 1, [](Patch& p) -> float& { return p.osc[0].pan; } },
+        { Group::oscB, "Position", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.osc[1].position; } },
+        { Group::oscB, "Level", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.osc[1].level; } },
+        { Group::oscB, "Fine", Unit::cents, -50, 50, [](Patch& p) -> float& { return p.osc[1].fine; } },
+        { Group::oscB, "Pan", Unit::pan, -1, 1, [](Patch& p) -> float& { return p.osc[1].pan; } },
+        { Group::filter, "Cutoff", Unit::cutoff, 20, 20000, [](Patch& p) -> float& { return p.cutoff; } },
+        { Group::filter, "Resonance", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.resonance; } },
+        { Group::filter, "Drive", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.drive; } },
+        { Group::filterEnv, "Attack", Unit::time, 0.002f, 6, [](Patch& p) -> float& { return p.filterEnv.attack; } },
+        { Group::filterEnv, "Decay", Unit::time, 0.002f, 6, [](Patch& p) -> float& { return p.filterEnv.decay; } },
+        { Group::filterEnv, "Sustain", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.filterEnv.sustain; } },
+        { Group::filterEnv, "Release", Unit::time, 0.002f, 8, [](Patch& p) -> float& { return p.filterEnv.release; } },
+        { Group::ampEnv, "Attack", Unit::time, 0.002f, 6, [](Patch& p) -> float& { return p.ampEnv.attack; } },
+        { Group::ampEnv, "Decay", Unit::time, 0.002f, 6, [](Patch& p) -> float& { return p.ampEnv.decay; } },
+        { Group::ampEnv, "Sustain", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.ampEnv.sustain; } },
+        { Group::ampEnv, "Release", Unit::time, 0.002f, 8, [](Patch& p) -> float& { return p.ampEnv.release; } },
+        { Group::lfo1, "Rate", Unit::frequency, 0.05f, 20, [](Patch& p) -> float& { return p.lfos[0].rate; } },
+        { Group::lfo1, "Depth", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.lfos[0].depth; } },
+        { Group::lfo2, "Rate", Unit::frequency, 0.05f, 20, [](Patch& p) -> float& { return p.lfos[1].rate; } },
+        { Group::lfo2, "Depth", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.lfos[1].depth; } },
+        { Group::voicing, "Glide", Unit::time, 0, maxGlide, [](Patch& p) -> float& { return p.voicing.glide; } },
+        { Group::voicing, "Detune", Unit::cents, 0, maxUnisonDetune, [](Patch& p) -> float& { return p.voicing.detune; } },
+        { Group::voicing, "Width", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.voicing.width; } },
+        { Group::output, "Volume", Unit::percent, 0, 1, [](Patch& p) -> float& { return p.volume; } }
+    }};
+    return targets;
+}
+
+namespace
+{
+void applyMacroRange(Patch& patch, int index, const MacroRange& range, float value) noexcept
+{
+    const auto& target = macroTargets()[index];
+    float result = range.start;
+    if (value == 1.0f)
+        result = range.end;
+    else if (value > 0.0f)
+    {
+        if (target.unit == MacroUnit::cutoff || target.unit == MacroUnit::frequency)
+            result = range.start * std::pow(range.end / range.start, value);
+        else
+            result += (range.end - range.start) * value;
+    }
+    target.parameter(patch) = std::clamp(result, target.min, target.max);
+}
+}
+
+void moveMacro(Patch& patch, int index, float value) noexcept
+{
+    auto& macro = patch.macros[index];
+    macro.value = std::clamp(value, 0.0f, 1.0f);
+    for (int i = 0; i < macroTargetCount; ++i)
+        if (const auto& range = macro.ranges[i])
+            applyMacroRange(patch, i, *range, macro.value);
+}
+
+void setMacroRange(Patch& patch, int macro, int target, MacroRange range) noexcept
+{
+    auto& control = patch.macros[macro];
+    control.ranges[target] = range;
+    applyMacroRange(patch, target, range, control.value);
+}
+
+std::optional<float> encoderValue(EncoderMode mode, int value, float current) noexcept
+{
+    if (mode == EncoderMode::absolute)
+        return static_cast<float>(value) / 127.0f;
+
+    int delta = 0;
+    switch (mode)
+    {
+        case EncoderMode::relative1: delta = value - 64; break;
+        case EncoderMode::relative2: delta = value < 64 ? value : value - 128; break;
+        case EncoderMode::relative3: delta = value - 16; break;
+        default: break;
+    }
+    if (delta == 0 || std::abs(delta) > 3)
+        return std::nullopt;
+    return std::clamp(current + static_cast<float>(delta) / 127.0f, 0.0f, 1.0f);
+}
+
 const std::array<NamedPatch, presetCount>& factoryPresets()
 {
     static const auto presets = []
@@ -100,7 +191,7 @@ std::string encodePatch(const NamedPatch& named)
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << std::setprecision(std::numeric_limits<float>::max_digits10);
-    out << "MOT11 2\nNAME " << std::quoted(named.name) << '\n';
+    out << "MOT11 3\nNAME " << std::quoted(named.name) << '\n';
     for (std::size_t i = 0; i < p.osc.size(); ++i)
     {
         const auto& o = p.osc[i];
@@ -131,6 +222,16 @@ std::string encodePatch(const NamedPatch& named)
             out << value << ' ';
         out << '\n';
     }
+    out << "MACROS\n";
+    for (const auto& macro : p.macros)
+    {
+        const auto count = std::count_if(macro.ranges.begin(), macro.ranges.end(),
+                                         [](const auto& range) { return range.has_value(); });
+        out << "MACRO " << macro.value << ' ' << count << '\n';
+        for (int i = 0; i < macroTargetCount; ++i)
+            if (const auto& range = macro.ranges[i])
+                out << i << ' ' << range->start << ' ' << range->end << '\n';
+    }
     return out.str();
 }
 
@@ -152,7 +253,7 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
 
     NamedPatch named;
     int version = 0;
-    if (!readTag("MOT11") || !readRange(version, 1, 2) || !readTag("NAME")
+    if (!readTag("MOT11") || !readRange(version, 1, 3) || !readTag("NAME")
         || !(in >> std::quoted(named.name)) || named.name.empty() || named.name.size() > 96
         || named.name.find_first_of("\r\n\t") != std::string::npos
         || named.name.find('\0') != std::string::npos)
@@ -193,7 +294,7 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
             return std::nullopt;
         lfo.shape = static_cast<Shape>(shape);
     }
-    if (version == 2)
+    if (version >= 2)
     {
         auto& v = p.voicing;
         int playMode = 0;
@@ -209,6 +310,28 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
         for (auto& value : row)
             if (!readRange(value, -1, 1))
                 return std::nullopt;
+    if (version >= 3)
+    {
+        if (!readTag("MACROS"))
+            return std::nullopt;
+        for (auto& macro : p.macros)
+        {
+            int count = 0;
+            if (!readTag("MACRO") || !readRange(macro.value, 0, 1) || !readRange(count, 0, macroTargetCount))
+                return std::nullopt;
+            for (int i = 0; i < count; ++i)
+            {
+                int index = 0;
+                if (!readRange(index, 0, macroTargetCount - 1) || macro.ranges[index])
+                    return std::nullopt;
+                const auto& target = macroTargets()[index];
+                MacroRange range {};
+                if (!readRange(range.start, target.min, target.max) || !readRange(range.end, target.min, target.max))
+                    return std::nullopt;
+                macro.ranges[index] = range;
+            }
+        }
+    }
     in >> std::ws;
     return in.eof() ? std::optional { named } : std::nullopt;
 }

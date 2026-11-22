@@ -23,6 +23,11 @@ juce::PropertiesFile::Options settingsOptions()
     options.osxLibrarySubFolder = "Application Support";
     return options;
 }
+
+juce::String macroMidiKey(int index)
+{
+    return "macroMidi" + juce::String(index + 1);
+}
 }
 
 struct Standalone::Input final : public juce::MidiInputCallback
@@ -61,6 +66,25 @@ Standalone::Standalone() : settings(std::make_unique<juce::PropertiesFile>(setti
     if (auto loaded = decodePatch(settings->getValue("patch").toStdString()))
         current = std::move(*loaded);
     patches.publish(current.sound);
+    for (int i = 0; i < macroCount; ++i)
+    {
+        auto& macro = macroMidi[i];
+        macro.position = current.sound.macros[i].value;
+        if (const auto node = settings->getXmlValue(macroMidiKey(i)))
+        {
+            auto& status = macro.status;
+            status.mode = static_cast<EncoderMode>(std::clamp(node->getIntAttribute("mode"), 0, 3));
+            const auto device = node->getStringAttribute("device");
+            const auto channel = node->getIntAttribute("channel");
+            const auto cc = node->getIntAttribute("cc", -1);
+            if (device.isNotEmpty() && channel >= 1 && channel <= 16 && cc >= 0 && cc < 120)
+            {
+                status.device = device;
+                status.channel = channel;
+                status.cc = cc;
+            }
+        }
+    }
 
     const auto saved = settings->getXmlValue("audio");
     audioError = deviceManager.initialise(0, 2, saved.get(), true);
@@ -76,17 +100,81 @@ Standalone::~Standalone()
     stopTimer();
     midiDeviceChanges.reset();
     deviceManager.removeChangeListener(this);
+    inputs.clear();
+    cancelPendingUpdate();
+    handleAsyncUpdate();
     storeSession();
     settings->saveIfNeeded();
     deviceManager.removeAudioCallback(this);
-    inputs.clear();
 }
 
 void Standalone::apply(NamedPatch patch)
 {
+    const std::lock_guard<std::mutex> lock(producers);
+    for (int i = 0; i < macroCount; ++i)
+    {
+        macroMidi[i].position = patch.sound.macros[i].value;
+        macroMidi[i].pendingOrder = 0;
+    }
     current = std::move(patch);
+    publishPatch();
+}
+
+void Standalone::updatePatch(Patch patch)
+{
+    const std::lock_guard<std::mutex> lock(producers);
+    for (int i = 0; i < macroCount; ++i)
+    {
+        if (patch.macros[i].value == current.sound.macros[i].value)
+            continue;
+        macroMidi[i].position = patch.macros[i].value;
+        macroMidi[i].pendingOrder = 0;
+    }
+    current.sound = std::move(patch);
+    publishPatch();
+}
+
+void Standalone::publishPatch(bool fromMidi)
+{
     patches.publish(current.sound);
     sessionDirty = true;
+    midiEditedPatch = fromMidi;
+    ++uiRevision;
+}
+
+Standalone::MacroMidiStatus Standalone::macroMidiStatus(int index)
+{
+    const std::lock_guard<std::mutex> lock(producers);
+    return macroMidi[index].status;
+}
+
+void Standalone::toggleMacroLearn(int index)
+{
+    const std::lock_guard<std::mutex> lock(producers);
+    const bool arm = !macroMidi[index].status.learning;
+    for (int i = 0; i < macroCount; ++i)
+        macroMidi[i].status.learning = arm && i == index;
+    ++uiRevision;
+}
+
+void Standalone::clearMacroMidi(int index)
+{
+    const std::lock_guard<std::mutex> lock(producers);
+    auto& macro = macroMidi[index];
+    const auto mode = macro.status.mode;
+    macro = {};
+    macro.status.mode = mode;
+    macro.position = current.sound.macros[index].value;
+    sessionDirty = true;
+    ++uiRevision;
+}
+
+void Standalone::setMacroEncoderMode(int index, EncoderMode mode)
+{
+    const std::lock_guard<std::mutex> lock(producers);
+    macroMidi[index].status.mode = mode;
+    sessionDirty = true;
+    ++uiRevision;
 }
 
 bool Standalone::load(const juce::File& file)
@@ -115,7 +203,9 @@ bool Standalone::save(const juce::File& file)
     juce::TemporaryFile temporary(file);
     if (!temporary.getFile().replaceWithData(data.data(), data.size()) || !temporary.overwriteTargetFileWithTemporary())
         return false;
-    apply(std::move(toSave));
+    current.name = std::move(toSave.name);
+    sessionDirty = true;
+    midiEditedPatch = false;
     return true;
 }
 
@@ -138,6 +228,16 @@ void Standalone::storeSession()
     settings->setValue("patch", juce::String::fromUTF8(encodePatch(current).c_str()));
     if (const auto xml = deviceManager.createStateXml())
         settings->setValue("audio", xml.get());
+    for (int i = 0; i < macroCount; ++i)
+    {
+        const auto status = macroMidiStatus(i);
+        juce::XmlElement node("MacroMidi");
+        node.setAttribute("device", status.device);
+        node.setAttribute("channel", status.channel);
+        node.setAttribute("cc", status.cc);
+        node.setAttribute("mode", static_cast<int>(status.mode));
+        settings->setValue(macroMidiKey(i), &node);
+    }
     sessionDirty = false;
 }
 
@@ -152,6 +252,30 @@ void Standalone::timerCallback()
 {
     refreshMidi();
     storeSession();
+}
+
+void Standalone::handleAsyncUpdate()
+{
+    const std::lock_guard<std::mutex> lock(producers);
+    const int first = macroMidi[0].pendingOrder <= macroMidi[1].pendingOrder ? 0 : 1;
+    bool moved = false;
+    for (int i : { first, 1 - first })
+    {
+        auto& macro = macroMidi[i];
+        if (macro.pendingOrder == 0)
+            continue;
+        moveMacro(current.sound, i, macro.position);
+        macro.pendingOrder = 0;
+        moved = true;
+    }
+    if (moved)
+        publishPatch(true);
+    if (learnedMacroMidi)
+    {
+        sessionDirty = true;
+        learnedMacroMidi = false;
+        ++uiRevision;
+    }
 }
 
 void Standalone::refreshMidi()
@@ -200,6 +324,8 @@ void Standalone::receive(Input& input, const juce::MidiMessage& message)
     if (channel < 1 || channel > 16)
         return;
     const std::lock_guard<std::mutex> lock(producers);
+    if (message.isController() && message.getControllerNumber() < 120)
+        receiveMacroCC(input.identifier, channel, message.getControllerNumber(), message.getControllerValue());
     auto& controls = input.channels[static_cast<std::size_t>(channel - 1)];
     Event e { EventType::expression, input.id, channel };
     if (message.isNoteOn())
@@ -232,6 +358,47 @@ void Standalone::receive(Input& input, const juce::MidiMessage& message)
         return;
     e.controls = controls;
     enqueue(e);
+}
+
+void Standalone::receiveMacroCC(const juce::String& device, int channel, int cc, int value)
+{
+    // The MIDI callback holds producers. Transfer only the latest position of
+    // each macro to the message thread, keeping the order for shared targets.
+    const auto matches = [&](const MacroMidiStatus& status)
+    {
+        return status.channel == channel && status.cc == cc && status.device == device;
+    };
+    for (auto& macro : macroMidi)
+    {
+        auto& status = macro.status;
+        if (!status.learning || !encoderValue(status.mode, value, macro.position))
+            continue;
+        for (auto& other : macroMidi)
+            if (&other != &macro && matches(other.status))
+            {
+                other.status.device.clear();
+                other.status.channel = 0;
+            }
+        status.device = device;
+        status.channel = channel;
+        status.cc = cc;
+        status.learning = false;
+        learnedMacroMidi = true;
+        triggerAsyncUpdate();
+        break;
+    }
+    for (auto& macro : macroMidi)
+    {
+        if (!matches(macro.status))
+            continue;
+        if (const auto next = encoderValue(macro.status.mode, value, macro.position);
+            next && *next != macro.position)
+        {
+            macro.position = *next;
+            macro.pendingOrder = ++macroMidiOrder;
+            triggerAsyncUpdate();
+        }
+    }
 }
 
 void Standalone::push(const Event& event)

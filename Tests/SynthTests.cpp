@@ -240,6 +240,60 @@ void glideAndUnison(const WaveBank& bank)
           "Unison chord exceeded full scale");
 }
 
+void performanceMacros(const WaveBank& bank)
+{
+    Patch patch;
+    const auto targetIndex = [&](float& parameter)
+    {
+        const auto& targets = macroTargets();
+        const auto it = std::find_if(targets.begin(), targets.end(),
+                                     [&](const auto& target) { return &target.parameter(patch) == &parameter; });
+        check(it != targets.end(), "Parameter missing from macro destinations");
+        return static_cast<int>(it - targets.begin());
+    };
+    const int position = targetIndex(patch.osc[0].position);
+    const int level = targetIndex(patch.osc[1].level);
+    const int filter = targetIndex(patch.cutoff);
+    setMacroRange(patch, 0, position, { 0.2f, 0.8f });
+    setMacroRange(patch, 0, level, { 0.9f, 0.1f });
+    setMacroRange(patch, 0, filter, { 200, 3200 });
+    moveMacro(patch, 0, 0.5f);
+    check(std::abs(patch.osc[0].position - 0.5f) < 0.00001f && std::abs(patch.osc[1].level - 0.5f) < 0.00001f
+          && std::abs(patch.cutoff - 800.0f) < 0.01f, "Macro midpoint failed");
+    moveMacro(patch, 0, 1.0f);
+    check(patch.osc[0].position == 0.8f && patch.osc[1].level == 0.1f && patch.cutoff == 3200,
+          "Macro clockwise endpoints failed");
+    setMacroRange(patch, 1, filter, { 100, 500 });
+    moveMacro(patch, 1, 1.0f);
+    check(patch.cutoff == 500 && patch.osc[1].level == 0.1f && patch.macros[0].value == 1.0f,
+          "Second macro affected other targets");
+    moveMacro(patch, 0, 0.0f);
+    check(patch.osc[0].position == 0.2f && patch.osc[1].level == 0.9f && patch.cutoff == 200,
+          "Macro counterclockwise endpoints failed");
+
+    setMacroRange(patch, 1, targetIndex(patch.volume), { 0.65f, 0.0f });
+    moveMacro(patch, 1, 0.0f);
+    Synth synth(bank);
+    synth.setPatch(patch);
+    check(peak(Block(synth, 4096, { {} }).left) > 0.01f, "Held note was silent before macro change");
+    moveMacro(patch, 1, 1.0f);
+    synth.setPatch(patch);
+    Block settling(synth, 4096);
+    check(peak(Block(synth, 1024).left) < 0.0001f, "Macro did not change audio on a held note");
+
+    check(encoderValue(EncoderMode::absolute, 0, 0.5f) == 0.0f
+          && encoderValue(EncoderMode::absolute, 127, 0.5f) == 1.0f, "Absolute MIDI endpoints failed");
+    for (const auto mode : { EncoderMode::relative1, EncoderMode::relative2, EncoderMode::relative3 })
+    {
+        const int positive = mode == EncoderMode::relative1 ? 66 : mode == EncoderMode::relative2 ? 2 : 18;
+        const int negative = mode == EncoderMode::relative1 ? 62 : mode == EncoderMode::relative2 ? 126 : 14;
+        check(encoderValue(mode, positive, 0.5f) == 0.5f + 2.0f / 127.0f
+              && encoderValue(mode, negative, 0.5f) == 0.5f - 2.0f / 127.0f
+              && !encoderValue(mode, 0, 0.5f)
+              && encoderValue(mode, positive, 1.0f) == 1.0f, "Relative MIDI decoding failed");
+    }
+}
+
 void patches()
 {
     for (const auto& preset : factoryPresets())
@@ -251,15 +305,24 @@ void patches()
     NamedPatch custom { "Custom \"01\"", factoryPresets()[2].sound };
     custom.sound.matrix[7][6] = -0.987f;
     custom.sound.voicing = { PlayMode::legato, 0.123f, 4, 35.0f, 0.83f };
+    custom.sound.macros[0].ranges[1] = MacroRange { 0.8f, 0.13f };
+    custom.sound.macros[1].ranges[8] = MacroRange { 180, 4000 };
+    moveMacro(custom.sound, 1, 0.65f);
     const auto encoded = encodePatch(custom);
     const auto decoded = decodePatch(encoded);
     check(decoded && encodePatch(*decoded) == encoded, "Custom patch failed round-trip");
     check(!decodePatch(encoded.substr(0, encoded.size() / 2)), "Truncated patch was accepted");
-    check(!decodePatch("MOT11 3" + encoded.substr(7)), "Unknown patch version was accepted");
+    check(!decodePatch("MOT11 4" + encoded.substr(7)), "Unknown patch version was accepted");
     check(!decodePatch(encoded + "junk"), "Unexpected trailing content was accepted");
     const auto voicing = encoded.find("VOICING ");
     const auto matrix = encoded.find("MATRIX\n", voicing);
-    const auto legacy = decodePatch("MOT11 1" + encoded.substr(7, voicing - 7) + encoded.substr(matrix));
+    const auto macros = encoded.find("MACROS\n", matrix);
+    const auto versionTwo = decodePatch("MOT11 2" + encoded.substr(7, macros - 7));
+    check(versionTwo && versionTwo->sound.voicing.mode == PlayMode::legato
+          && versionTwo->sound.macros[1].value == 0 && !versionTwo->sound.macros[1].ranges[8],
+          "Version 2 patch failed to load with default macros");
+    const auto legacy = decodePatch("MOT11 1" + encoded.substr(7, voicing - 7)
+                                    + encoded.substr(matrix, macros - matrix));
     const Voicing defaults;
     check(legacy && legacy->sound.voicing.mode == defaults.mode && legacy->sound.voicing.glide == defaults.glide
           && legacy->sound.voicing.unison == defaults.unison && legacy->sound.voicing.detune == defaults.detune
@@ -267,6 +330,10 @@ void patches()
           "Legacy patch failed to load with default voicing");
     check(!decodePatch(encoded.substr(0, voicing) + "VOICING 2 0.1 5 50 1\n" + encoded.substr(matrix)),
           "Out-of-range unison was accepted");
+    check(!decodePatch(encoded.substr(0, macros) + "MACROS\nMACRO 0 1\n8 0 1000\nMACRO 0 0\n"),
+          "Out-of-range macro endpoint was accepted");
+    check(!decodePatch(encoded.substr(0, macros) + "MACROS\nMACRO 0 2\n1 0 1\n1 1 0\nMACRO 0 0\n"),
+          "Duplicate macro destination was accepted");
 }
 }
 
@@ -279,6 +346,7 @@ int main()
         modulationAndPolyphony(bank);
         monoPlaying(bank);
         glideAndUnison(bank);
+        performanceMacros(bank);
         patches();
         std::cout << "MO-T 11 headless checks passed\n";
     }
