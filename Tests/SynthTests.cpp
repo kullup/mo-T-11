@@ -186,6 +186,18 @@ void analogOscillators(const WaveBank& bank)
     synth.setPatch(p);
     const Block direct(synth, 4800, { a440 });
     check(modulated.left == direct.left, "Oscillator C position route did not set pulse width");
+
+    auto tuned = sinePatch();
+    tuned.osc[0].table = sineTable;
+    for (int semitones : { -24, 24 })
+    {
+        tuned.osc[0].semitone = semitones;
+        synth.prepare(48000);
+        synth.setPatch(tuned);
+        const Block shifted(synth, 9600, { a440 });
+        const float expected = semitones < 0 ? 110.0f : 1760.0f;
+        check(std::abs(pitch(shifted.left, 4800, 9600) - expected) < 1.0f, "Two-octave oscillator tune is incorrect");
+    }
 }
 
 void monoPlaying(const WaveBank& bank)
@@ -331,6 +343,14 @@ void patches()
     check(legacy1 && encodePatch(*legacy1) == encodePatch(migrated), "Version 1 patch failed to migrate");
     check(!decodePatch(encoded.substr(0, voicing) + "VOICING 2 0.1 5 50 1\n" + encoded.substr(matrix)),
           "Out-of-range unison was accepted");
+
+    custom.sound.osc[0].semitone = -24;
+    custom.sound.osc[1].semitone = 24;
+    const auto tuned = encodePatch(custom);
+    const auto decodedTuned = decodePatch(tuned);
+    check(decodedTuned && encodePatch(*decodedTuned) == tuned, "Two-octave oscillator tune failed round-trip");
+    custom.sound.osc[1].semitone = 25;
+    check(!decodePatch(encodePatch(custom)), "Out-of-range oscillator tune was accepted");
 }
 }
 

@@ -114,6 +114,8 @@ public:
         const float diameter = static_cast<float>(std::min(w, h)) - 15.0f;
         const juce::Point<float> centre { x + w * 0.5f, y + h * 0.5f };
         const auto bounds = Rectangle<float>(diameter, diameter).withCentre(centre);
+        const bool customFace = slider.isColourSpecified(juce::Slider::thumbColourId);
+        const auto face = customFace ? slider.findColour(juce::Slider::thumbColourId) : steel;
         const auto radialPoint = [&](float angle, float distance)
         {
             return centre.getPointOnCircumference(distance, angle);
@@ -127,16 +129,18 @@ public:
         }
         g.setColour(Colour(0x290c120f));
         g.fillEllipse(bounds.expanded(1.0f).translated(0.0f, 3.4f));
-        g.setColour(Colour(0xffada99c));
+        g.setColour(customFace ? face.darker(0.42f) : Colour(0xffada99c));
         g.fillEllipse(bounds.translated(0.0f, 1.5f));
-        g.setGradientFill({ steel, bounds.getTopLeft(), Colour(0xffdcd8ca), bounds.getBottomRight(), false });
+        g.setGradientFill({ face, bounds.getTopLeft(), customFace ? face.darker(0.22f) : Colour(0xffdcd8ca),
+                            bounds.getBottomRight(), false });
         g.fillEllipse(bounds);
-        g.setColour(Colour(0xfffcfaf2));
+        g.setColour(customFace ? face.brighter(0.35f) : Colour(0xfffcfaf2));
         g.drawEllipse(bounds.reduced(0.75f), 1.15f);
         g.setColour(slider.isMouseOverOrDragging() || slider.hasKeyboardFocus(true) ? blue : quiet.withAlpha(0.22f));
         g.drawEllipse(bounds, slider.hasKeyboardFocus(true) ? 1.65f : 1.0f);
         const float angle = start + position * (end - start);
-        g.setColour(slider.isEnabled() ? mark : quiet.withAlpha(0.48f));
+        const auto indicator = customFace ? steel : mark;
+        g.setColour(slider.isEnabled() ? indicator : quiet.withAlpha(0.48f));
         g.drawLine({ radialPoint(angle, diameter * 0.14f), radialPoint(angle, diameter * 0.39f) }, diameter > 70 ? 3.3f : 2.35f);
         g.fillEllipse(Rectangle<float>(3.0f, 3.0f).withCentre(centre));
     }
@@ -485,7 +489,8 @@ private:
     inline static const int compactHeight = 676;
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
     inline static const std::array<const char*, oscillatorCount> oscillatorNames { "A", "B", "C" };
-    inline static const std::array<const char*, 4> oscillatorColumns { "POS", "TUNE", "VOL", "PAN" };
+    enum OscillatorColumn { positionColumn, tuneColumn, fineColumn, volumeColumn };
+    inline static const std::array<const char*, 4> oscillatorColumns { "POS", "TUNE", "FINE", "VOL" };
     inline static const std::array<Destination, destinationCount> matrixColumns {
         positionA, positionB, positionC, pitchA, pitchB, pitchC, cutoff, resonance, pan
     };
@@ -501,7 +506,8 @@ private:
     static Rectangle<int> oscillatorDisplay(int row) { return { 36, 169 + row * 100, 146, 92 }; }
     static Rectangle<int> oscillatorKnob(int row, int column)
     {
-        return { oscillatorColumnX(column) - 34, oscillatorDisplay(row).getY() + 4, 68, 68 };
+        const Rectangle<int> area { oscillatorColumnX(column) - 34, oscillatorDisplay(row).getY() + 4, 68, 68 };
+        return area.reduced(column == fineColumn ? 5 : 0, 0);
     }
     static int matrixColumnX(int column) { return 1139 + column * 23; }
 
@@ -591,7 +597,7 @@ private:
             const String title = "Oscillator " + String(oscillatorNames[i]) + " wavetable: " + tableNames[current.table];
             tableButtons[i]->setTitle(title);
             tableButtons[i]->setTooltip(title + ". Click to choose.");
-            oscillatorKnobs[i][0]->setEnabled(!isFixedTable(current.table));
+            oscillatorKnobs[i][positionColumn]->setEnabled(!isFixedTable(current.table));
         }
         viewButton->setButtonText(stacked[engine] ? "STACK" : "CYCLE");
         phaseButton->setButtonText(osc.resetPhase ? "RESET" : "FREE");
@@ -647,23 +653,25 @@ private:
             tableButtons[i] = &table;
 
             auto& knobs = oscillatorKnobs[i];
-            knobs[0] = &oscSlider(&Oscillator::position, row, name + " wavetable position", oscillatorKnob(i, 0),
-                                  0, 1, 0.001, [this, i](double v)
+            knobs[positionColumn] = &oscSlider(&Oscillator::position, row, name + " wavetable position",
+                                               oscillatorKnob(i, positionColumn), 0, 1, 0.001, [this, i](double v)
             {
                 const auto selectedTable = audio.patch().sound.osc[i].table;
                 if (isFixedTable(selectedTable)) return String("FIXED");
                 return percent(selectedTable == pulseTable ? pulseDuty(static_cast<float>(v)) : v);
             });
-            knobs[1] = &oscSlider(&Oscillator::semitone, row, name + " semitones", oscillatorKnob(i, 1),
-                                  -12, 12, 1, [](double v) { return signedValue(juce::roundToInt(v), " st"); });
-            knobs[2] = &oscSlider(&Oscillator::level, row, name + " volume", oscillatorKnob(i, 2),
-                                  0, 1, 0.001, percent);
-            knobs[3] = &oscSlider(&Oscillator::pan, row, name + " stereo pan", oscillatorKnob(i, 3),
-                                  -1, 1, 0.01, [](double v)
+            knobs[tuneColumn] = &oscSlider(&Oscillator::semitone, row, name + " tune in semitones",
+                                           oscillatorKnob(i, tuneColumn), -maxOscillatorSemitones, maxOscillatorSemitones,
+                                           1, [](double v) { return signedValue(juce::roundToInt(v), " st"); });
+            knobs[fineColumn] = &oscSlider(&Oscillator::fine, row, name + " fine tune in cents",
+                                           oscillatorKnob(i, fineColumn), -50, 50, 0.1, [](double v)
             {
-                if (std::abs(v) < 0.005) return String("C");
-                return String(v < 0 ? "L " : "R ") + percent(std::abs(v));
+                return String(v > 0.0 ? "+" : "") + String(v, 1) + " ct";
             });
+            auto& volume = oscSlider(&Oscillator::level, row, name + " volume",
+                                     oscillatorKnob(i, volumeColumn), 0, 1, 0.001, percent);
+            volume.setColour(juce::Slider::thumbColourId, mark);
+            knobs[volumeColumn] = &volume;
 
             engineButtons[i] = &button(tag, name + " setup", { 38 + 32 * i, 498, 28, 23 }, [this, i]
             {
@@ -685,8 +693,12 @@ private:
         const auto selected = [this] { return engine; };
         setupKnobs[0] = &oscSlider(&Oscillator::octave, selected, "Oscillator octave", { 282, 475, 41, 37 },
                                    -2, 2, 1, [](double v) { return signedValue(juce::roundToInt(v)); });
-        setupKnobs[1] = &oscSlider(&Oscillator::fine, selected, "Oscillator fine tune in cents", { 351, 475, 41, 37 },
-                                   -50, 50, 0.1, [](double v) { return signedValue(juce::roundToInt(v), " c"); });
+        setupKnobs[1] = &oscSlider(&Oscillator::pan, selected, "Oscillator stereo pan", { 351, 475, 41, 37 },
+                                   -1, 1, 0.01, [](double v)
+        {
+            if (std::abs(v) < 0.005) return String("C");
+            return String(v < 0 ? "L " : "R ") + percent(std::abs(v));
+        });
         setupKnobs[2] = &oscSlider(&Oscillator::phase, selected, "Oscillator start phase in reset mode", { 420, 475, 41, 37 },
                                    0, 1, 0.005, [](double v) { return String(juce::roundToInt(v * 360)); });
     }
@@ -1051,8 +1063,8 @@ private:
         {
             const auto area = oscillatorDisplay(row);
             g.setColour(quiet.withAlpha(0.65f));
-            g.drawHorizontalLine(oscillatorKnob(row, 0).getCentreY(), static_cast<float>(area.getRight()),
-                                 static_cast<float>(oscillatorColumnX(3)));
+            g.drawHorizontalLine(oscillatorKnob(row, positionColumn).getCentreY(), static_cast<float>(area.getRight()),
+                                 static_cast<float>(oscillatorColumnX(volumeColumn)));
             paintWavetable(g, row, area);
             for (auto* knob : oscillatorKnobs[row])
             {
@@ -1070,7 +1082,7 @@ private:
         label(g, "OSC SETUP", { 38, 477, 90, 18 }, 11.0f, quiet, juce::Justification::centredLeft, true);
         label(g, "PHASE MODE", { 132, 477, 73, 18 }, 11.0f, quiet, juce::Justification::centred, true);
         label(g, "DISPLAY", { 201, 477, 69, 18 }, 11.0f, quiet, juce::Justification::centred, true);
-        static constexpr const char* captions[] { "OCT", "FINE", "PHASE" };
+        static constexpr const char* captions[] { "OCT", "PAN", "PHASE" };
         for (int i = 0; i < static_cast<int>(setupKnobs.size()); ++i)
         {
             auto& knob = *setupKnobs[i];

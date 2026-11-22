@@ -185,7 +185,7 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
         auto& o = p.osc[i];
         if (!readTag(oscillatorTags[i]) || !readRange(o.table, 0, lastTable)
             || !readRange(o.position, 0, 1) || !readRange(o.level, 0, 1)
-            || !readRange(o.octave, -2, 2) || !readRange(o.semitone, -12, 12)
+            || !readRange(o.octave, -2, 2) || !readRange(o.semitone, -maxOscillatorSemitones, maxOscillatorSemitones)
             || !readRange(o.fine, -50, 50) || !readRange(o.pan, -1, 1)
             || !readRange(o.phase, 0, 1) || !(in >> o.resetPhase))
             return std::nullopt;

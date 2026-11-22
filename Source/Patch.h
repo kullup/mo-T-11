@@ -11,6 +11,7 @@ constexpr int oscillatorCount = 3;
 constexpr int sourceCount = 8;
 constexpr int presetCount = 9;
 constexpr int maxUnison = 4;
+constexpr int maxOscillatorSemitones = 24;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 
 enum Source { lfo1, lfo2, filterEnvelope, ampEnvelope, velocity, keyTrack, wheel, pressure };
