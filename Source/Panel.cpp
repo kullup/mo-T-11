@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <optional>
 #include <string_view>
 
 namespace mot
@@ -72,14 +73,14 @@ void pixels(Graphics& g, const String& source, float x, float y, float scale, Co
     }
 }
 
-void display(Graphics& g, Rectangle<int> bounds)
+void display(Graphics& g, Rectangle<int> bounds, Colour background = screen)
 {
     g.setColour(bezel);
     g.fillRoundedRectangle(bounds.toFloat(), 5.0f);
     g.setColour(Colour(0xff45473a));
     g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 5.0f, 1.0f);
     const auto inner = bounds.reduced(4);
-    g.setColour(screen);
+    g.setColour(background);
     g.fillRoundedRectangle(inner.toFloat(), 3.0f);
     g.setColour(Colour(0x0cbeb078));
     for (int y = inner.getY() + 3; y < inner.getBottom() - 2; y += 3)
@@ -201,108 +202,173 @@ public:
         const auto text = button.findColour(button.getToggleState() ? juce::TextButton::textColourOnId
                                                                   : juce::TextButton::textColourOffId);
         label(g, button.getButtonText(), button.getLocalBounds().reduced(4, 2).translated(0, down ? 1 : -1),
-              button.getHeight() > 32 ? 14.0f : 12.0f, text, juce::Justification::centred, true);
+              button.getHeight() > 32 ? 14.0f : 12.0f, text.withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.40f),
+              juce::Justification::centred, true);
     }
 };
 
-class MatrixTargetButton final : public juce::Button
+struct MatrixRoute
 {
-public:
-    MatrixTargetButton() : Button("Matrix target")
+    int source;
+    Destination target;
+
+    bool operator==(const MatrixRoute& other) const noexcept
     {
-        setWantsKeyboardFocus(true);
-        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        return source == other.source && target == other.target;
     }
-
-    void show(int column, Destination nextTarget, bool selected)
-    {
-        target = nextTarget;
-        const auto title = "Matrix target " + String(column + 1) + ", " + destinationNames[target];
-        setTitle(title);
-        setTooltip(title + ". Click to change.");
-        setToggleState(selected, juce::dontSendNotification);
-        repaint();
-    }
-
-    void paintButton(Graphics& g, bool over, bool down) override
-    {
-        static constexpr const char* legends[destinationCount][2] {
-            { "POS", "A" }, { "POS", "B" }, { "PCH", "A" }, { "PCH", "B" }, { "CUT", "" },
-            { "RES", "" }, { "PAN", "" }, { "POS", "C" }, { "PCH", "C" },
-            { "LVL", "A" }, { "LVL", "B" }, { "LVL", "C" },
-            { "PAN", "A" }, { "PAN", "B" }, { "PAN", "C" }, { "DRV", "" }, { "AMP", "" }
-        };
-        const auto bounds = getLocalBounds().toFloat().reduced(0.5f);
-        const bool focused = hasKeyboardFocus(true);
-        const bool lit = getToggleState() || over || focused;
-        g.setColour(amber.withAlpha(down ? 0.26f : lit ? 0.15f : 0.05f));
-        g.fillRoundedRectangle(bounds, 2.0f);
-        if (lit)
-        {
-            g.setColour(amber.withAlpha(over || focused ? 0.85f : 0.55f));
-            g.drawRoundedRectangle(bounds, 2.0f, 1.0f);
-        }
-
-        const auto draw = [&](const String& text, float y)
-        {
-            const float width = text.length() * 6.0f - 1.0f;
-            pixels(g, text, std::floor((getWidth() - width) * 0.5f), y, 1.0f,
-                   amber.withAlpha(lit ? 1.0f : 0.77f));
-        };
-        const auto& legend = legends[target];
-        const bool twoLines = legend[1][0] != '\0';
-        draw(legend[0], twoLines ? 4.0f : 9.0f);
-        if (twoLines)
-            draw(legend[1], 14.0f);
-    }
-
-private:
-    Destination target = positionA;
 };
 
-class MatrixCell final : public juce::Button
+int matrixColumn(const Patch& patch, Destination target)
+{
+    const auto& targets = patch.matrixTargets;
+    const auto it = std::find(targets.begin(), targets.end(), target);
+    return it == targets.end() ? -1 : static_cast<int>(it - targets.begin());
+}
+
+bool matrixColumnIsEmpty(const Patch& patch, int column)
+{
+    return std::none_of(patch.matrix.begin(), patch.matrix.end(), [column](const auto& amounts)
+        { return amounts[column] != 0.0f; });
+}
+
+int unusedMatrixColumn(const Patch& patch)
+{
+    for (int column = 0; column < matrixColumnCount; ++column)
+        if (matrixColumnIsEmpty(patch, column))
+            return column;
+    return -1;
+}
+
+float matrixAmount(const Patch& patch, MatrixRoute route)
+{
+    const int column = matrixColumn(patch, route.target);
+    return column >= 0 ? patch.matrix[route.source][column] : 0.0f;
+}
+
+String matrixAmountText(double amount)
+{
+    const int value = juce::roundToInt(amount * 100.0);
+    return (value < 0 ? String("-") : String("+")) + String(std::abs(value)).paddedLeft('0', 2) + "%";
+}
+
+class MatrixDisplay final : public juce::Component, private juce::ListBoxModel
 {
 public:
-    MatrixCell() : Button("Matrix route")
+    MatrixDisplay()
     {
-        setWantsKeyboardFocus(true);
+        list.setTitle("Modulation routes");
+        list.setDescription("Select a route with the arrow keys. Press Enter to focus Amount.");
+        list.setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
+        list.setRowHeight(60);
+        list.getViewport()->setScrollBarThickness(8);
+        list.getVerticalScrollBar().setColour(juce::ScrollBar::thumbColourId, amber.withAlpha(0.62f));
+        addAndMakeVisible(list);
     }
 
-    void show(const String& name, float nextAmount, bool nextSelected)
+    void show(const Patch& patch, std::optional<MatrixRoute> selection, bool revealSelection)
     {
-        amount = nextAmount;
-        setTitle(name);
-        setToggleState(nextSelected, juce::dontSendNotification);
-        setTooltip(name + "  " + signedValue(juce::roundToInt(amount * 100.0f), "%"));
+        const juce::ScopedValueSetter<bool> update(updating, true);
+        rows.clear();
+        int selectedRow = -1;
+        for (int source = 0; source < sourceCount; ++source)
+            for (int target = 0; target < destinationCount; ++target)
+            {
+                const MatrixRoute route { source, static_cast<Destination>(target) };
+                const float amount = matrixAmount(patch, route);
+                const bool selected = selection == route;
+                if (selected)
+                    selectedRow = getNumRows();
+                if (amount != 0.0f || selected)
+                    rows.push_back({ route, amount });
+            }
+
+        list.updateContent();
+        const bool selectionMoved = list.getLastRowSelected() != selectedRow;
+        if (selectionMoved)
+        {
+            juce::SparseSet<int> selected;
+            if (selectedRow >= 0)
+                selected.addRange({ selectedRow, selectedRow + 1 });
+            list.setSelectedRows(selected, juce::dontSendNotification);
+        }
+        if ((revealSelection || selectionMoved) && selectedRow >= 0)
+            list.scrollToEnsureRowIsOnscreen(selectedRow);
+        else if (revealSelection)
+            list.getViewport()->setViewPosition(0, 0);
+        list.repaint();
         repaint();
     }
 
-    void paintButton(Graphics& g, bool over, bool down) override
+    std::function<void(MatrixRoute)> onSelect;
+    std::function<void()> onEditAmount, onClear;
+
+private:
+    struct Row { MatrixRoute route; float amount; };
+
+    void resized() override { list.setBounds(getLocalBounds().reduced(12)); }
+
+    static void centredPixels(Graphics& g, const String& text, int centre, float y, float scale, Colour colour)
     {
-        const auto face = getLocalBounds().toFloat().reduced(1.0f).withTrimmedBottom(2.5f);
-        const bool selected = getToggleState();
-        const auto lit = amount < 0 ? blue : mark;
-        g.setColour(Colour(0xffa39e90));
-        g.fillRoundedRectangle(face.translated(0.0f, 2.0f), 4.0f);
-        g.setColour(down ? steel.darker(0.12f) : over ? steel.interpolatedWith(amber, 0.21f) : steel);
-        g.fillRoundedRectangle(face, 4.0f);
-        g.setColour(selected ? ink : line);
-        g.drawRoundedRectangle(face, 4.0f, selected ? 1.8f : 0.8f);
-        if (selected || amount != 0)
+        const float width = (text.length() * 6 - 1) * scale;
+        pixels(g, text, std::round(centre - width * 0.5f), y, scale, colour);
+    }
+
+    void paint(Graphics& g) override
+    {
+        display(g, getLocalBounds(), Colour(0xff0d0d0a));
+        if (rows.empty())
         {
-            const auto lamp = Rectangle<float>(10.0f, 4.0f).withCentre(face.getCentre());
-            g.setColour(amount != 0 ? lit : line);
-            g.fillRoundedRectangle(lamp, 1.1f);
-        }
-        if (hasKeyboardFocus(true))
-        {
-            g.setColour(blue);
-            g.drawRoundedRectangle(face.reduced(2.8f), 2.25f, 1.0f);
+            centredPixels(g, "NO ROUTES", getWidth() / 2, 136.0f, 2.0f, amber);
+            centredPixels(g, "USE ADD ROUTE", getWidth() / 2, 161.0f, 1.0f, amber.withAlpha(0.65f));
         }
     }
 
-private:
-    float amount = 0;
+    int getNumRows() override { return static_cast<int>(rows.size()); }
+
+    String getNameForRow(int index) override
+    {
+        if (!juce::isPositiveAndBelow(index, getNumRows())) return {};
+        const auto& [route, amount] = rows[index];
+        return String(sourceNames[route.source]) + " to " + destinationNames[route.target] + ", " + matrixAmountText(amount);
+    }
+
+    void paintListBoxItem(int index, Graphics& g, int width, int height, bool selected) override
+    {
+        if (!juce::isPositiveAndBelow(index, getNumRows())) return;
+        const auto& [route, amount] = rows[index];
+        const int divider = width * 2 / 3;
+        const auto colour = selected ? amber.brighter(0.12f) : amber;
+        if (selected)
+        {
+            g.fillAll(amber.withAlpha(0.12f));
+            g.setColour(colour);
+            g.fillRect(1, 1, 3, height - 2);
+        }
+        g.setColour(amber.withAlpha(0.54f));
+        g.drawRect(0, 0, width, height, 1);
+        g.drawVerticalLine(divider, 0.0f, static_cast<float>(height));
+
+        const int centre = divider / 2;
+        centredPixels(g, sourceNames[route.source], centre, 8.0f, 2.0f, colour);
+        g.setColour(colour);
+        g.drawLine(centre - 5.0f, 28.0f, static_cast<float>(centre), 33.0f, 1.5f);
+        g.drawLine(static_cast<float>(centre), 33.0f, centre + 5.0f, 28.0f, 1.5f);
+        centredPixels(g, destinationNames[route.target], centre, 39.0f, 2.0f, colour);
+        centredPixels(g, matrixAmountText(amount), (divider + width) / 2, 22.0f, 2.4f, colour);
+    }
+
+    void selectedRowsChanged(int index) override
+    {
+        if (!updating && juce::isPositiveAndBelow(index, getNumRows()) && onSelect)
+            onSelect(rows[index].route);
+    }
+
+    void returnKeyPressed(int) override { if (onEditAmount) onEditAmount(); }
+    void deleteKeyPressed(int) override { if (onClear) onClear(); }
+
+    bool updating = false;
+    std::vector<Row> rows;
+    juce::ListBox list { "Modulation routes", this };
 };
 
 class PerformanceKeys final : public juce::Component, public juce::SettableTooltipClient
@@ -503,7 +569,7 @@ public:
         paintPlate(g, lfoPanel, "LFO");
         paintPlate(g, matrixPanel, "MOD MATRIX");
         paintLfoAndEnvelope(g);
-        paintMatrix(g);
+        label(g, "AMOUNT", { 1344, 516, 64, 14 }, 11.5f, ink, juce::Justification::centred, true);
         paintPlate(g, voicingPanel, "VOICING");
         label(g, "PLAY MODE", { 36, 583, 246, 15 }, 11.5f, quiet, juce::Justification::centredLeft, true);
         paintPlate(g, effectsPanel, {});
@@ -546,7 +612,7 @@ private:
     inline static const std::array<const char*, oscillatorCount> oscillatorNames { "A", "B", "C" };
     enum OscillatorColumn { positionColumn, tuneColumn, fineColumn, volumeColumn };
     inline static const std::array<const char*, 4> oscillatorColumns { "POS", "TUNE", "FINE", "VOL" };
-    inline static const Rectangle<int> matrixDisplay { 1069, 156, 334, 88 };
+    inline static const Rectangle<int> matrixScreenBounds { 1069, 145, 334, 324 };
     inline static const Rectangle<int> performanceStatus { 117, 683, 267, 84 };
     inline static const Rectangle<int> headerNotice { 839, 78, 554, 15 };
     inline static const std::array<const char*, 3> modeNames { "POLY", "MONO", "LEGATO" };
@@ -558,8 +624,6 @@ private:
         const Rectangle<int> area { oscillatorColumnX(column) - 34, oscillatorDisplay(row).getY() + 4, 68, 68 };
         return area.reduced(column == fineColumn ? 5 : 0, 0);
     }
-    static int matrixColumnX(int column) { return 1139 + column * 23; }
-
     juce::TextButton& button(const String& caption, const String& name, Rectangle<int> area,
                              std::function<void()> action, bool onHeader = false)
     {
@@ -627,7 +691,7 @@ private:
         syncControls();
     }
 
-    void syncControls()
+    void syncControls(bool revealMatrixSelection = false)
     {
         const auto& p = audio.patch().sound;
         const auto& osc = p.osc[engine];
@@ -662,14 +726,10 @@ private:
             lfoModeButtons[i]->setButtonText(p.lfos[i].restart ? "KEY" : "FREE");
             lfoModeButtons[i]->setToggleState(p.lfos[i].restart, juce::dontSendNotification);
         }
-        for (int col = 0; col < matrixColumnCount; ++col)
-        {
-            const auto target = p.matrixTargets[col];
-            matrixTargets[col].show(col, target, matrixCol == col);
-            for (int row = 0; row < sourceCount; ++row)
-                matrix[row][col]->show(String(sourceNames[row]) + " to " + destinationNames[target],
-                                       p.matrix[row][col], matrixRow == row && matrixCol == col);
-        }
+        matrixScreen.show(p, matrixSelection, revealMatrixSelection);
+        matrixAmountKnob->setEnabled(matrixSelection.has_value());
+        matrixClear->setEnabled(matrixSelection.has_value());
+        matrixTarget->setEnabled(matrixSelection && matrixAmount(p, *matrixSelection) != 0.0f);
         presetMenu->setTitle("Factory presets. Current patch " + String::fromUTF8(audio.patch().name.c_str()));
         repaint();
     }
@@ -819,50 +879,60 @@ private:
 
     void createMatrix()
     {
-        for (int col = 0; col < matrixColumnCount; ++col)
-        {
-            auto& target = matrixTargets[col];
-            target.setBounds(matrixColumnX(col), 215, 22, 25);
-            target.onClick = [this, col] { showMatrixTargets(col); };
-            addAndMakeVisible(target);
-        }
-        for (int row = 0; row < sourceCount; ++row)
-            for (int col = 0; col < matrixColumnCount; ++col)
+        matrixScreen.setBounds(matrixScreenBounds);
+        matrixScreen.onSelect = [this](MatrixRoute route) { selectMatrixRoute(route); };
+        matrixScreen.onEditAmount = [this] { matrixAmountKnob->grabKeyboardFocus(); };
+        matrixScreen.onClear = [this] { clearMatrixRoute(); };
+        addAndMakeVisible(matrixScreen);
+
+        matrixAdd = &button("ADD ROUTE", "Add a modulation route", { 1069, 482, 92, 29 },
+                            [this] { showMatrixAddMenu(); });
+        matrixTarget = &button("TARGET", "Change the destination for all routes that use this target",
+                              { 1169, 482, 69, 29 }, [this] { showMatrixTargets(); });
+        matrixClear = &button("CLEAR", "Clear selected modulation route", { 1246, 482, 60, 29 },
+                             [this] { clearMatrixRoute(); });
+        const auto read = [this](const Patch& p) { return matrixSelection ? matrixAmount(p, *matrixSelection) : 0.0f; };
+        matrixAmountKnob = &slider("Modulation amount", {}, { 1352, 471, 48, 46 }, false, -1, 1, 0.01, read,
+            [this](Patch& p, double value)
             {
-                auto cell = std::make_unique<MatrixCell>();
-                cell->onClick = [this, row, col]
+                if (!matrixSelection) return;
+                const auto route = *matrixSelection;
+                int column = matrixColumn(p, route.target);
+                if (column < 0 && value != 0.0)
                 {
-                    matrixRow = row;
-                    matrixCol = col;
-                    syncControls();
-                };
-                addAndMakeVisible(*cell);
-                cell->setBounds(matrixColumnX(col), 248 + row * 32, 22, 26);
-                matrix[row][col] = std::move(cell);
-            }
-        const auto read = [this](const Patch& p) { return p.matrix[matrixRow][matrixCol]; };
-        const auto write = [this](Patch& p, double v) { p.matrix[matrixRow][matrixCol] = static_cast<float>(v); };
-        const auto format = [](double v) { return signedValue(juce::roundToInt(v * 100), "%"); };
-        slider("Matrix amount fader", {}, { 1359, 267, 34, 215 }, true, -1, 1, 0.01, read, write, format);
-        button("CLEAR", "Clear selected matrix route", { 1347, 493, 56, 26 }, [this, write]
-        {
-            edit([&](Patch& p) { write(p, 0.0); });
-        });
+                    column = unusedMatrixColumn(p);
+                    if (column >= 0)
+                        p.matrixTargets[column] = route.target;
+                }
+                if (column >= 0)
+                    p.matrix[route.source][column] = static_cast<float>(value);
+            }, matrixAmountText);
     }
 
-    void showMatrixTargets(int col)
+    void selectMatrixRoute(MatrixRoute route)
     {
-        matrixCol = col;
-        syncControls();
-        const auto& targets = audio.patch().sound.matrixTargets;
-        juce::PopupMenu menu;
-        menu.setLookAndFeel(&skin);
-        const auto addTarget = [&](Destination target)
+        matrixSelection = route;
+        syncControls(true);
+    }
+
+    void clearMatrixRoute()
+    {
+        if (!matrixSelection) return;
+        const auto route = *matrixSelection;
+        matrixSelection.reset();
+        const auto& patch = audio.patch().sound;
+        if (matrixAmount(patch, route) != 0.0f)
         {
-            const bool selected = target == targets[col];
-            const bool available = std::find(targets.begin(), targets.end(), target) == targets.end();
-            menu.addItem(target + 1, destinationNames[target], selected || available, selected);
-        };
+            const int column = matrixColumn(patch, route.target);
+            edit([route, column](Patch& p) { p.matrix[route.source][column] = 0.0f; });
+        }
+        else
+            syncControls();
+    }
+
+    template <typename AddTarget>
+    static void addMatrixDestinations(juce::PopupMenu& menu, AddTarget addTarget)
+    {
         menu.addSectionHeader("Oscillators");
         for (const auto& group : { positionDestinations, pitchDestinations, levelDestinations, panDestinations })
             for (auto target : group)
@@ -873,15 +943,74 @@ private:
         menu.addSectionHeader("Amplifier");
         addTarget(ampGain);
         addTarget(pan);
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&matrixTargets[col]).withMaximumNumColumns(1),
-            [safe = SafePointer<Surface>(this), col](int id)
+    }
+
+    void showMatrixAddMenu()
+    {
+        keys.release();
+        const auto& p = audio.patch().sound;
+        const bool hasFreeTarget = unusedMatrixColumn(p) >= 0;
+        juce::PopupMenu menu;
+        menu.setLookAndFeel(&skin);
+        menu.addSectionHeader("Modulation source");
+        for (int source = 0; source < sourceCount; ++source)
         {
-            if (safe == nullptr || id <= 0)
-                return;
+            juce::PopupMenu destinations;
+            addMatrixDestinations(destinations, [&](Destination target)
+            {
+                const bool assigned = matrixColumn(p, target) >= 0;
+                const bool hasRoute = matrixAmount(p, { source, target }) != 0.0f;
+                destinations.addItem(1 + source * destinationCount + target, destinationNames[target],
+                                     assigned || hasFreeTarget, hasRoute);
+            });
+            menu.addSubMenu(sourceNames[source], destinations);
+        }
+        if (!hasFreeTarget)
+            menu.addSectionHeader("All nine destination slots in use");
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(matrixAdd),
+            [safe = SafePointer<Surface>(this)](int id)
+        {
+            if (safe == nullptr || id <= 0) return;
+            const MatrixRoute route { (id - 1) / destinationCount, static_cast<Destination>((id - 1) % destinationCount) };
+            const auto& patch = safe->audio.patch().sound;
+            if (matrixColumn(patch, route.target) >= 0 || unusedMatrixColumn(patch) >= 0)
+                safe->selectMatrixRoute(route);
+        });
+    }
+
+    void showMatrixTargets()
+    {
+        if (!matrixSelection) return;
+        keys.release();
+        const auto route = *matrixSelection;
+        const auto& p = audio.patch().sound;
+        juce::PopupMenu menu;
+        menu.setLookAndFeel(&skin);
+        addMatrixDestinations(menu, [&](Destination target)
+        {
+            const bool selected = target == route.target;
+            const int column = matrixColumn(p, target);
+            menu.addItem(target + 1, destinationNames[target], selected || column < 0 || matrixColumnIsEmpty(p, column),
+                         selected);
+        });
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(matrixTarget).withMaximumNumColumns(1),
+            [safe = SafePointer<Surface>(this), route](int id)
+        {
+            if (safe == nullptr || id <= 0 || !(safe->matrixSelection == route)) return;
             const auto target = static_cast<Destination>(id - 1);
-            const auto& current = safe->audio.patch().sound.matrixTargets;
-            if (std::find(current.begin(), current.end(), target) == current.end())
-                safe->edit([col, target](Patch& p) { p.matrixTargets[col] = target; });
+            const auto& patch = safe->audio.patch().sound;
+            const int column = matrixColumn(patch, route.target);
+            const int targetColumn = matrixColumn(patch, target);
+            if (column < 0 || target == route.target || (targetColumn >= 0 && !matrixColumnIsEmpty(patch, targetColumn)))
+                return;
+            safe->matrixSelection = MatrixRoute { route.source, target };
+            safe->edit([column, targetColumn, target](Patch& next)
+            {
+                if (targetColumn >= 0)
+                    std::swap(next.matrixTargets[column], next.matrixTargets[targetColumn]);
+                else
+                    next.matrixTargets[column] = target;
+            });
         });
     }
 
@@ -984,7 +1113,8 @@ private:
         presetSlot = slot;
         edited = false;
         audio.apply(factoryPresets()[slot]);
-        syncControls();
+        matrixSelection.reset();
+        syncControls(true);
     }
 
     void showPresets()
@@ -1040,7 +1170,8 @@ private:
         presetSlot = -1;
         edited = false;
         notice((saving ? "Saved " : "Opened ") + file.getFileName());
-        syncControls();
+        if (!saving) matrixSelection.reset();
+        syncControls(!saving);
     }
 
     void showOutputs()
@@ -1243,25 +1374,6 @@ private:
         }
     }
 
-    void paintMatrix(Graphics& g) const
-    {
-        display(g, matrixDisplay);
-        const auto& p = audio.patch().sound;
-        const int value = juce::roundToInt(p.matrix[matrixRow][matrixCol] * 100.0f);
-        pixels(g, "ROUTE", 1083, 169, 1, amber.withAlpha(0.64f));
-        pixels(g, String(sourceNames[matrixRow]) + " > " + destinationNames[p.matrixTargets[matrixCol]],
-               1083, 187, 1, amber);
-        const auto amount = (value >= 0 ? String("+") : String("-")) + String(std::abs(value)).paddedLeft('0', 2) + "%";
-        pixels(g, amount, 1389 - amount.length() * 18, 176, 3, amber);
-        g.setColour(amber.withAlpha(0.24f));
-        g.drawHorizontalLine(209, 1078.0f, 1394.0f);
-        pixels(g, "TARGETS", 1083, 224, 1, amber.withAlpha(0.64f));
-        for (int i = 0; i < sourceCount; ++i)
-            label(g, String(sourceNames[i]).toUpperCase(), { 1069, 248 + i * 32, 68, 23 }, 12.5f,
-                  i == matrixRow ? mark : quiet, juce::Justification::centredLeft, i == matrixRow);
-        label(g, "AMOUNT", { 1341, 248, 68, 15 }, 10.5f, quiet, juce::Justification::centred, true);
-    }
-
     void paintPerformance(Graphics& g) const
     {
         const Rectangle<float> area { 22, 666, 1396, 112 };
@@ -1291,8 +1403,8 @@ private:
     juce::TooltipWindow tooltips { this, 450 };
     std::vector<std::unique_ptr<juce::TextButton>> buttons;
     std::vector<BoundSlider> sliders;
-    std::array<MatrixTargetButton, matrixColumnCount> matrixTargets;
-    std::array<std::array<std::unique_ptr<MatrixCell>, matrixColumnCount>, sourceCount> matrix;
+    MatrixDisplay matrixScreen;
+    std::optional<MatrixRoute> matrixSelection;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::File fileDirectory;
     std::array<juce::TextButton*, oscillatorCount> engineButtons {}, tableButtons {};
@@ -1309,8 +1421,12 @@ private:
     juce::TextButton* performanceButton = nullptr;
     juce::TextButton* octaveDown = nullptr;
     juce::TextButton* octaveUp = nullptr;
+    juce::TextButton* matrixAdd = nullptr;
+    juce::TextButton* matrixTarget = nullptr;
+    juce::TextButton* matrixClear = nullptr;
     juce::Slider* masterVolume = nullptr;
-    int engine = 0, matrixRow = 0, matrixCol = 0, octave = 4, presetSlot = -1;
+    juce::Slider* matrixAmountKnob = nullptr;
+    int engine = 0, octave = 4, presetSlot = -1;
     bool edited = false, messageIsError = false;
     String message;
     double messageEnd = 0.0;
