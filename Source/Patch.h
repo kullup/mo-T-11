@@ -15,6 +15,9 @@ constexpr int maxUnison = 4;
 constexpr int maxOscillatorSemitones = 24;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 constexpr float minTapeTime = 0.05f, maxTapeTime = 1.2f, maxTapeFeedback = 0.9f;
+constexpr float minPlateDecay = 0.25f, maxPlateDecay = 20.0f;
+
+float plateDecaySeconds(float normalized) noexcept;
 
 enum Source { lfo1, lfo2, filterEnvelope, ampEnvelope, velocity, keyTrack, wheel, pressure };
 // Destination values are stored in patch files. Append new destinations before destinationCount.
@@ -95,7 +98,7 @@ struct TapeDelaySettings
 struct ReverbSettings
 {
     bool enabled = false;
-    float size = 0.55f, damping = 0.42f, mix = 0.25f;
+    float decay = 0.55f, damping = 0.42f, mix = 0.25f;
 };
 
 struct Patch

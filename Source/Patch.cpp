@@ -18,6 +18,11 @@ constexpr int legacyOscillatorCount = 2, legacyDestinationCount = 7;
 constexpr int fixedMatrixDestinationCount = 9;
 }
 
+float plateDecaySeconds(float normalized) noexcept
+{
+    return minPlateDecay * std::pow(maxPlateDecay / minPlateDecay, normalized);
+}
+
 const std::array<NamedPatch, presetCount>& factoryPresets()
 {
     static const auto presets = []
@@ -158,7 +163,7 @@ std::string encodePatch(const NamedPatch& named)
     const auto& reverb = p.reverb;
     out << "TAPE_DELAY " << tape.enabled << ' ' << tape.time << ' ' << tape.feedback
         << ' ' << tape.wear << ' ' << tape.mix << '\n';
-    out << "REVERB " << reverb.enabled << ' ' << reverb.size << ' ' << reverb.damping << ' ' << reverb.mix << '\n';
+    out << "REVERB " << reverb.enabled << ' ' << reverb.decay << ' ' << reverb.damping << ' ' << reverb.mix << '\n';
     return out.str();
 }
 
@@ -272,7 +277,7 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
         if (!readTag("TAPE_DELAY") || !(in >> tape.enabled) || !readRange(tape.time, minTapeTime, maxTapeTime)
             || !readRange(tape.feedback, 0, maxTapeFeedback) || !readRange(tape.wear, 0, 1)
             || !readRange(tape.mix, 0, 1) || !readTag("REVERB") || !(in >> reverb.enabled)
-            || !readRange(reverb.size, 0, 1) || !readRange(reverb.damping, 0, 1) || !readRange(reverb.mix, 0, 1))
+            || !readRange(reverb.decay, 0, 1) || !readRange(reverb.damping, 0, 1) || !readRange(reverb.mix, 0, 1))
             return std::nullopt;
     }
     in >> std::ws;

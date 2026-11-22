@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace mot
 {
@@ -9,6 +10,21 @@ namespace
 {
 constexpr float turn = 6.28318530718f;
 constexpr float stereoOffset = 0.037f, stereoSkew = 0.008f, maxDrift = 0.004f;
+
+// Plate topology and nominal delay lengths from Dattorro, Effect Design, Part 1, Fig. 1 and Table 2.
+constexpr float plateReferenceRate = 29761.0f;
+constexpr std::array<int, 4> plateInputLengths { 142, 107, 379, 277 };
+constexpr std::array<std::array<int, 4>, 2> plateTankLengths {{
+    { 672, 4453, 1800, 3720 }, { 908, 4217, 2656, 3163 }
+}};
+constexpr std::array<std::array<int, 7>, 2> platePickupOffsets {{
+    { 266, 2974, 1913, 1996, 1990, 187, 1066 }, { 353, 3627, 1228, 2673, 2111, 335, 121 }
+}};
+
+int plateSamples(int referenceSamples, float rate) noexcept
+{
+    return std::max(1, static_cast<int>(std::round(referenceSamples * rate / plateReferenceRate)));
+}
 
 float blend(float a, float b, float amount) noexcept { return a + (b - a) * amount; }
 
@@ -69,6 +85,13 @@ float Effects::DelayLine::interpolate(float offset) const noexcept
 float Effects::DelayLine::readOldest() const noexcept
 {
     return valid == static_cast<int>(buffer.size()) ? buffer[head] : 0.0f;
+}
+
+float Effects::DelayLine::allPass(float input, float delayed, float coefficient) noexcept
+{
+    const float next = input + coefficient * delayed;
+    push(next);
+    return delayed - coefficient * next;
 }
 
 void Effects::TapeDelay::prepare(float sampleRate, const TapeDelaySettings& settings)
@@ -139,72 +162,79 @@ void Effects::TapeDelay::process(float& left, float& right, const TapeDelaySetti
     right = blend(right, wetR, mix);
 }
 
-void Effects::Reverb::Channel::prepare(float rate, int channel)
+void Effects::PlateReverb::Tank::prepare(float rate, std::size_t side)
 {
-    const auto samples = [rate](float seconds)
-    {
-        return std::max(1, static_cast<int>(std::round(seconds * rate)));
-    };
-    constexpr std::array<float, 4> combTimes { 0.0297f, 0.0371f, 0.0411f, 0.0437f };
-    constexpr std::array<float, 3> diffusionTimes { 0.0051f, 0.0037f, 0.0017f };
-    for (std::size_t i = 0; i < combs.size(); ++i)
-        combs[i].prepare(samples(combTimes[i] + channel * 0.00137f));
-    for (std::size_t i = 0; i < diffusers.size(); ++i)
-        diffusers[i].prepare(samples(diffusionTimes[i] + channel * 0.00031f));
-    filtered = {};
+    const auto& lengths = plateTankLengths[side];
+    centre = static_cast<float>(plateSamples(lengths[0], rate));
+    excursion = 0.0004f * rate;
+    modulatedDiffuser.prepare(static_cast<int>(std::ceil(centre + excursion)) + 2);
+    firstDelay.prepare(plateSamples(lengths[1], rate));
+    secondDiffuser.prepare(plateSamples(lengths[2], rate));
+    lastDelay.prepare(plateSamples(lengths[3], rate));
+    phaseStep = turn * (side == 0 ? 0.61f : 0.87f) / rate;
 }
 
-void Effects::Reverb::Channel::reset() noexcept
+void Effects::PlateReverb::Tank::reset() noexcept
 {
-    for (auto& comb : combs)
-        comb.reset();
-    for (auto& diffuser : diffusers)
-        diffuser.reset();
-    filtered = {};
+    modulatedDiffuser.reset();
+    firstDelay.reset();
+    secondDiffuser.reset();
+    lastDelay.reset();
+    filtered = phase = 0.0f;
 }
 
-float Effects::Reverb::Channel::process(float input, float feedback, float damping) noexcept
+void Effects::PlateReverb::Tank::process(float input, float damping) noexcept
 {
-    // Parallel damped combs build the tail. All-pass stages increase echo density.
-    float wet = 0.0f;
-    for (std::size_t i = 0; i < combs.size(); ++i)
+    advancePhase(phase, phaseStep);
+    const float offset = std::max(1.0f, centre + excursion * std::sin(phase));
+    const float diffused = modulatedDiffuser.allPass(input, modulatedDiffuser.interpolate(offset), -0.70f);
+    filtered = blend(filtered, firstDelay.readOldest(), damping);
+    firstDelay.push(diffused);
+    lastDelay.push(secondDiffuser.allPass(filtered, secondDiffuser.readOldest(), 0.50f));
+}
+
+float Effects::PlateReverb::Tank::pickup(const Tank& opposite, const std::array<int, 7>& taps) const noexcept
+{
+    // Each virtual pickup combines reflections from different points in both halves of the plate.
+    return firstDelay.read(taps[0]) + firstDelay.read(taps[1]) - secondDiffuser.read(taps[2]) + lastDelay.read(taps[3])
+           - opposite.firstDelay.read(taps[4]) - opposite.secondDiffuser.read(taps[5]) - opposite.lastDelay.read(taps[6]);
+}
+
+void Effects::PlateReverb::prepare(float rate, const ReverbSettings& settings)
+{
+    for (std::size_t i = 0; i < inputDiffusers.size(); ++i)
+        inputDiffusers[i].prepare(plateSamples(plateInputLengths[i], rate));
+    int pathSamples = 0;
+    for (std::size_t i = 0; i < tanks.size(); ++i)
     {
-        const float delayed = combs[i].readOldest();
-        filtered[i] = blend(filtered[i], delayed, damping);
-        combs[i].push(input + feedback * filtered[i]);
-        wet += delayed;
+        tanks[i].prepare(rate, i);
+        const auto& lengths = plateTankLengths[i];
+        pathSamples += std::accumulate(lengths.begin(), lengths.end(), 0);
+        for (std::size_t tap = 0; tap < outputTaps[i].size(); ++tap)
+            outputTaps[i][tap] = plateSamples(platePickupOffsets[i][tap], rate);
     }
-    wet *= 0.25f;
-    for (auto& diffuser : diffusers)
-    {
-        constexpr float diffusion = 0.58f;
-        const float delayed = diffuser.readOldest();
-        const float next = wet + diffusion * delayed;
-        diffuser.push(next);
-        wet = delayed - diffusion * next;
-    }
-    return wet;
-}
-
-void Effects::Reverb::prepare(float rate, const ReverbSettings& settings)
-{
-    for (std::size_t i = 0; i < channels.size(); ++i)
-        channels[i].prepare(rate, static_cast<int>(i));
+    // The figure-eight has two feedback multipliers around the full circuit.
+    const float halfLoopSeconds = pathSamples / (2.0f * plateReferenceRate);
+    decayExponent = std::log(0.001f) * halfLoopSeconds;
+    decaySetting = -1.0f;
     controlSmoothing = 1.0f - std::exp(-1.0f / (0.008f * rate));
-    bright = onePole(12500.0f, rate);
-    dark = onePole(900.0f, rate);
+    bandwidth = onePole(12000.0f, rate);
+    dark = onePole(1000.0f, rate);
     mix = settings.enabled ? settings.mix : 0.0f;
-    running = false;
+    reset();
 }
 
-void Effects::Reverb::reset() noexcept
+void Effects::PlateReverb::reset() noexcept
 {
-    for (auto& channel : channels)
-        channel.reset();
+    for (auto& diffuser : inputDiffusers)
+        diffuser.reset();
+    for (auto& tank : tanks)
+        tank.reset();
+    inputTone = 0.0f;
     running = false;
 }
 
-void Effects::Reverb::process(float& left, float& right, const ReverbSettings& settings) noexcept
+void Effects::PlateReverb::process(float& left, float& right, const ReverbSettings& settings) noexcept
 {
     mix = fadeMix(mix, settings.enabled ? settings.mix : 0.0f, controlSmoothing);
     if (!settings.enabled && mix == 0.0f)
@@ -214,18 +244,34 @@ void Effects::Reverb::process(float& left, float& right, const ReverbSettings& s
         return;
     }
 
+    if (settings.decay != decaySetting)
+    {
+        decaySetting = settings.decay;
+        targetFeedback = std::exp(decayExponent / plateDecaySeconds(decaySetting));
+    }
     if (!running)
     {
-        size = settings.size;
+        feedback = targetFeedback;
         damping = settings.damping;
         running = true;
     }
-    size = blend(size, settings.size, controlSmoothing);
+    feedback = blend(feedback, targetFeedback, controlSmoothing);
     damping = blend(damping, settings.damping, controlSmoothing);
-    const float feedback = blend(0.52f, 0.93f, size);
-    const float colour = blend(bright, dark, damping);
-    const float wetL = channels[0].process(blend(left, right, 0.20f), feedback, colour);
-    const float wetR = channels[1].process(blend(right, left, 0.20f), feedback, colour);
+    const float colour = blend(1.0f, dark, damping);
+
+    inputTone = blend(inputTone, (left + right) * 0.5f, bandwidth);
+    float input = inputTone * 0.55f;
+    for (std::size_t i = 0; i < inputDiffusers.size(); ++i)
+    {
+        auto& diffuser = inputDiffusers[i];
+        input = diffuser.allPass(input, diffuser.readOldest(), i < 2 ? 0.75f : 0.625f);
+    }
+
+    const float returnedL = tanks[0].lastDelay.readOldest(), returnedR = tanks[1].lastDelay.readOldest();
+    tanks[0].process(input + feedback * returnedR, colour);
+    tanks[1].process(input + feedback * returnedL, colour);
+    const float wetL = 0.42f * tanks[1].pickup(tanks[0], outputTaps[0]);
+    const float wetR = 0.42f * tanks[0].pickup(tanks[1], outputTaps[1]);
     left = blend(left, wetL, mix);
     right = blend(right, wetR, mix);
 }

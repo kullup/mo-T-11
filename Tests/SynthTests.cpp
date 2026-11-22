@@ -391,6 +391,38 @@ void effects(const WaveBank& bank)
     check(peak(Block(synth, 4800).left) == 0.0f, "Re-enabling reverb brought back a bypassed tail");
 }
 
+void plateDecay()
+{
+    check(plateDecaySeconds(0.0f) == 0.25f && plateDecaySeconds(1.0f) == 20.0f,
+          "Plate knob does not cover the full decay range");
+    for (const int rate : { 44100, 96000 })
+    {
+        const auto measure = [rate](float decay, int lateSecond)
+        {
+            Patch patch;
+            patch.reverb = { true, decay, 0.2f, 1.0f };
+            Effects fx;
+            fx.prepare(static_cast<float>(rate), patch);
+            std::array<double, 2> energy {};
+            for (int i = 0; i < (lateSecond + 1) * rate; ++i)
+            {
+                float left = i == 0 ? 1.0f : 0.0f, right = left;
+                fx.process(left, right, patch);
+                check(std::isfinite(left) && std::isfinite(right), "Plate impulse response became non-finite");
+                const double power = left * left + right * right;
+                if (i < rate) energy[0] += power;
+                if (i >= lateSecond * rate) energy[1] += power;
+            }
+            return energy;
+        };
+        const auto shortTail = measure(0.0f, 2);
+        const auto longTail = measure(1.0f, 15);
+        check(shortTail[1] < shortTail[0] * 1.0e-8, "Minimum plate decay left a long tail");
+        check(longTail[1] > longTail[0] * 1.0e-7 && longTail[1] < longTail[0] * 0.001,
+              "Maximum plate decay did not sustain a fading tail for 15 seconds");
+    }
+}
+
 void patches()
 {
     for (const auto& preset : factoryPresets())
@@ -486,6 +518,7 @@ int main()
         monoPlaying(bank);
         glideAndUnison(bank);
         effects(bank);
+        plateDecay();
         patches();
         std::cout << "MO-T 11 headless checks passed\n";
     }

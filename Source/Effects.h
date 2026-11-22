@@ -22,6 +22,7 @@ private:
         float read(int offset) const noexcept;
         float interpolate(float offset) const noexcept;
         float readOldest() const noexcept;
+        float allPass(float input, float delayed, float coefficient) noexcept;
 
         std::vector<float> buffer;
         int head = 0, valid = 0;
@@ -41,29 +42,32 @@ private:
         bool running = false;
     };
 
-    struct Reverb
+    struct PlateReverb
     {
-        struct Channel
+        struct Tank
         {
-            void prepare(float sampleRate, int channel);
+            void prepare(float sampleRate, std::size_t side);
             void reset() noexcept;
-            float process(float input, float feedback, float damping) noexcept;
+            void process(float input, float damping) noexcept;
+            float pickup(const Tank& opposite, const std::array<int, 7>& taps) const noexcept;
 
-            std::array<DelayLine, 4> combs;
-            std::array<float, 4> filtered {};
-            std::array<DelayLine, 3> diffusers;
+            DelayLine modulatedDiffuser, firstDelay, secondDiffuser, lastDelay;
+            float filtered = 0, phase = 0, phaseStep = 0, centre = 0, excursion = 0;
         };
 
         void prepare(float sampleRate, const ReverbSettings&);
         void reset() noexcept;
         void process(float& left, float& right, const ReverbSettings&) noexcept;
 
-        std::array<Channel, 2> channels;
-        float mix = 0, size = 0, damping = 0, controlSmoothing = 0, bright = 0, dark = 0;
+        std::array<DelayLine, 4> inputDiffusers;
+        std::array<Tank, 2> tanks;
+        std::array<std::array<int, 7>, 2> outputTaps {};
+        float mix = 0, damping = 0, feedback = 0, targetFeedback = 0, decaySetting = -1;
+        float decayExponent = 0, controlSmoothing = 0, bandwidth = 0, inputTone = 0, dark = 0;
         bool running = false;
     };
 
     TapeDelay tape;
-    Reverb reverb;
+    PlateReverb reverb;
 };
 }

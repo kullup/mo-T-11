@@ -1095,13 +1095,14 @@ private:
         auto& tapeMix = effectKnob(&Patch::tapeDelay, &TapeDelaySettings::mix, "Tape delay wet mix", "MIX", 817);
         tapeMix.setColour(juce::Slider::thumbColourId, mark);
 
-        reverbSwitch = &button({}, "Toggle reverb", { reverbX, lowerPanelY + 59, 92, 27 }, [this]
+        reverbSwitch = &button({}, "Toggle plate reverb", { reverbX, lowerPanelY + 59, 92, 27 }, [this]
         {
             edit([](Patch& p) { p.reverb.enabled = !p.reverb.enabled; });
         });
-        effectKnob(&Patch::reverb, &ReverbSettings::size, "Reverb size and decay", "SIZE", 1064);
-        effectKnob(&Patch::reverb, &ReverbSettings::damping, "Reverb high-frequency damping", "DAMP", 1168);
-        auto& reverbMix = effectKnob(&Patch::reverb, &ReverbSettings::mix, "Reverb wet mix", "MIX", 1272);
+        effectKnob(&Patch::reverb, &ReverbSettings::decay, "Plate reverb decay time", "DECAY", 1064,
+                   0, 1, 0.01, [](double v) { return seconds(plateDecaySeconds(static_cast<float>(v))); });
+        effectKnob(&Patch::reverb, &ReverbSettings::damping, "Plate reverb high-frequency damping", "DAMP", 1168);
+        auto& reverbMix = effectKnob(&Patch::reverb, &ReverbSettings::mix, "Plate reverb wet mix", "MIX", 1272);
         reverbMix.setColour(juce::Slider::thumbColourId, blue);
     }
 
@@ -1300,7 +1301,7 @@ private:
             label(g, name, { x, lowerPanelY + 35, 108, 20 }, 14.5f, ink, juce::Justification::centredLeft, true);
         };
         bankLabel("TAPE DELAY", tapeX);
-        bankLabel("REVERB", reverbX);
+        bankLabel("PLATE REVERB", reverbX);
     }
 
     void paintHeader(Graphics& g) const
