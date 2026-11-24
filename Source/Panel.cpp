@@ -19,7 +19,7 @@ using juce::String;
 
 struct PanelPalette
 {
-    struct { Colour body, rim, edge, plate, highlight, performance; } enclosure;
+    struct { Colour body, rim, edge, plate, highlight; } enclosure;
     struct { Colour ink, quiet, cool, warm; } legend;
     struct { Colour bezel, edge, glass, scanline, phosphor; } display;
     struct { Colour face, base, shade, rim, pointer, warm, cool, accentPointer, track, fill; } control;
@@ -29,7 +29,7 @@ struct PanelPalette
 };
 
 const PanelPalette classicPalette {
-    { Colour(0xffd7d4ca), Colour(0xffeeebe0), Colour(0xffa9a79d), Colour(0xffe5e2d8), Colour(0xfff5f2e8), Colour(0xffc4c1b6) },
+    { Colour(0xffd7d4ca), Colour(0xffeeebe0), Colour(0xffa9a79d), Colour(0xffe5e2d8), Colour(0xfff5f2e8) },
     { Colour(0xff282e2d), Colour(0xff58605b), Colour(0xff326675), Colour(0xffa84a25) },
     { Colour(0xff191c18), Colour(0xff45473a), Colour(0xff141812), Colour(0x0cbeb078), Colour(0xfff7b564) },
     { Colour(0xfff5f2e8), Colour(0xffada99c), Colour(0xffdcd8ca), Colour(0xfffcfaf2), Colour(0xffa84a25),
@@ -41,7 +41,7 @@ const PanelPalette classicPalette {
 };
 
 const PanelPalette classicDarkPalette {
-    { Colour(0xff292d2d), Colour(0xff515653), Colour(0xff5d6560), Colour(0xff353a38), Colour(0xff484e4b), Colour(0xff252b29) },
+    { Colour(0xff292d2d), Colour(0xff515653), Colour(0xff5d6560), Colour(0xff353a38), Colour(0xff484e4b) },
     { Colour(0xfff1eee2), Colour(0xffbfc6ba), Colour(0xff93c7d4), Colour(0xffefaa74) },
     classicPalette.display,
     { Colour(0xff565c58), Colour(0xff202523), Colour(0xff3a413d), Colour(0xff6d776f), Colour(0xffefaa74),
@@ -53,7 +53,7 @@ const PanelPalette classicDarkPalette {
 };
 
 const PanelPalette midnightPalette {
-    { Colour(0xff171715), Colour(0xff777066), Colour(0xff514c44), Colour(0xff262522), Colour(0xff403c35), Colour(0xff1b1b19) },
+    { Colour(0xff171715), Colour(0xff777066), Colour(0xff514c44), Colour(0xff262522), Colour(0xff403c35) },
     { Colour(0xffeee4d4), Colour(0xffbbb1a0), Colour(0xffdcc096), Colour(0xffdb9359) },
     { Colour(0xff0c0b0a), Colour(0xff5a4c3c), Colour(0xff190f08), Colour(0x16eca355), Colour(0xffffb75e) },
     { Colour(0xff383733), Colour(0xff0b0b0a), Colour(0xff20201d), Colour(0xff71685b), Colour(0xfff2dec1),
@@ -73,6 +73,8 @@ constexpr ThemeOption themeOptions[] {
 
 constexpr float displayTextScale = 1.3f;
 constexpr int woodCheekWidth = 32;
+constexpr int headerInset = 19;
+constexpr int classicSideTrim = 20;
 
 juce::Font panelFont(float size, bool bold = false)
 {
@@ -371,42 +373,64 @@ public:
     void drawButtonBackground(Graphics& g, juce::Button& button, const Colour& colour,
                               bool highlighted, bool down) override
     {
-        const auto phosphor = palette().display.phosphor;
+        const auto& c = palette();
+        const auto phosphor = c.display.phosphor;
+        const bool enabled = button.isEnabled();
+        const bool focused = enabled && button.hasKeyboardFocus(true);
         const float radius = isMidnight() ? 2.0f : 3.5f;
-        const auto area = button.getLocalBounds().toFloat().reduced(0.75f).withTrimmedBottom(2.0f);
+        const auto area = button.getLocalBounds().toFloat().reduced(1.5f).withTrimmedBottom(2.0f);
         if (colour.isTransparent())
         {
-            if (highlighted || button.hasKeyboardFocus(true))
+            if (enabled && (highlighted || focused || down))
             {
-                g.setColour(phosphor.withAlpha(button.hasKeyboardFocus(true) ? 0.9f : 0.55f));
+                g.setColour(phosphor.withAlpha(down ? 1.0f : focused ? 0.85f : 0.5f));
                 g.drawRoundedRectangle(area, 4.0f, 1.0f);
             }
             return;
         }
-        const auto face = area.translated(0.0f, down ? 1.2f : 0.0f);
-        const auto fill = down ? colour.darker(0.14f) : highlighted ? colour.brighter(0.08f) : colour;
-        g.setColour(isMidnight() ? Colour(0xb0000000) : Colour(0x350e1510));
+
+        const bool lit = enabled && button.getToggleState();
+        const bool pressed = enabled && down;
+        const float opacity = enabled ? 1.0f : 0.48f;
+        const auto offColour = button.findColour(juce::TextButton::buttonColourId);
+        const auto face = area.translated(0.0f, pressed ? 1.4f : 0.0f);
+        const auto base = lit ? colour : offColour;
+        const auto fill = pressed ? base.interpolatedWith(phosphor, 0.22f).darker(0.10f)
+                                  : enabled && highlighted ? base.brighter(0.10f) : base;
+
+        g.setColour(Colour(0xff101611).withAlpha(isMidnight() ? 0.72f * opacity : 0.32f * opacity));
         g.fillRoundedRectangle(area.translated(0.0f, 2.0f), radius);
-        if (isMidnight())
-            g.setGradientFill({ fill.brighter(0.25f), face.getTopLeft(), fill.darker(0.27f), face.getBottomLeft(), false });
-        else
-            g.setColour(fill);
-        g.fillRoundedRectangle(face, radius);
-        g.setColour(button.hasKeyboardFocus(true) ? phosphor : colour.contrasting(0.22f));
-        g.drawRoundedRectangle(isMidnight() ? face : area, radius, button.hasKeyboardFocus(true) ? 1.65f : 0.85f);
-        if (isMidnight() && button.getToggleState() && button.isEnabled())
+        if (lit || pressed)
         {
-            g.setColour(phosphor);
-            g.fillRect(face.getX() + 3.5f, face.getY() + 3.5f, 2.8f, 2.8f);
+            g.setColour(phosphor.withAlpha(lit ? 0.42f : 0.24f));
+            g.fillRoundedRectangle(face.expanded(1.25f), radius + 1.0f);
+        }
+
+        const auto top = fill.interpolatedWith(juce::Colours::white, lit ? 0.28f : 0.14f);
+        g.setGradientFill({ top.withAlpha(opacity), face.getTopLeft(),
+                            fill.darker(lit ? 0.16f : 0.23f).withAlpha(opacity), face.getBottomLeft(), false });
+        g.fillRoundedRectangle(face, radius);
+        g.setColour((lit ? phosphor.darker(0.40f) : offColour.contrasting(0.36f)).withMultipliedAlpha(opacity));
+        g.drawRoundedRectangle(face, radius, 0.8f);
+        g.setColour(juce::Colours::white.withAlpha((lit ? 0.65f : 0.34f) * opacity));
+        g.fillRect(face.getX() + radius, face.getY() + 1.0f, face.getWidth() - 2.0f * radius, 0.8f);
+
+        if (focused)
+        {
+            const auto ink = offColour.getPerceivedBrightness() > 0.55f ? c.legend.cool
+                : c.legend.cool.interpolatedWith(juce::Colours::white, 0.45f);
+            g.setColour(ink);
+            g.drawRoundedRectangle(area.expanded(0.9f, 0.9f).withBottom(area.getBottom() + 2.7f), radius + 0.9f, 1.1f);
         }
     }
 
     void drawButtonText(Graphics& g, juce::TextButton& button, bool, bool down) override
     {
-        const auto text = button.findColour(button.getToggleState() ? juce::TextButton::textColourOnId
-                                                                  : juce::TextButton::textColourOffId);
-        label(g, button.getButtonText(), button.getLocalBounds().reduced(4, 2).translated(0, down ? 1 : -1),
-              button.getHeight() > 32 ? 14.0f : 12.0f, text.withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.40f),
+        const bool enabled = button.isEnabled();
+        const auto text = button.findColour(enabled && button.getToggleState() ? juce::TextButton::textColourOnId
+                                                                                : juce::TextButton::textColourOffId);
+        label(g, button.getButtonText(), button.getLocalBounds().reduced(4, 2).translated(0, enabled && down ? 1 : -1),
+              button.getHeight() > 32 ? 14.0f : 12.0f, text.withMultipliedAlpha(enabled ? 1.0f : 0.40f),
               juce::Justification::centred, true);
     }
 
@@ -761,32 +785,73 @@ public:
     bool playComputerKey(const juce::KeyPress& press) { return keys.playComputerKey(press); }
     bool releaseComputerKeys() { return keys.releaseComputerKeys(); }
     void releasePerformanceKeys() { keys.release(); }
-    Colour surroundColour() const { return skin.palette().header.shell; }
     bool hasWoodCheeks() const { return skin.isDark(); }
+    bool hasTopRail() const { return skin.isMidnight(); }
+
+    Rectangle<int> faceplateBounds() const
+    {
+        const auto bounds = getLocalBounds();
+        return hasTopRail() ? bounds : bounds.withTrimmedTop(headerInset).reduced(classicSideTrim, 0);
+    }
+
+    void paintChassis(Graphics& g, Rectangle<float> bounds) const
+    {
+        const auto& c = skin.palette();
+        auto face = bounds;
+        g.fillAll(c.enclosure.body);
+        if (hasWoodCheeks())
+        {
+            drawWoodCheek(g, face.removeFromLeft(woodCheekWidth), false);
+            drawWoodCheek(g, face.removeFromRight(woodCheekWidth), true);
+        }
+
+        if (skin.isMidnight())
+            g.setGradientFill({ c.enclosure.plate, face.getTopLeft(), c.enclosure.body, face.getBottomLeft(), false });
+        else
+            g.setColour(c.enclosure.plate);
+        g.fillRect(face);
+
+        const float headerTop = hasTopRail() ? static_cast<float>(headerInset) : face.getY();
+        constexpr float headerBottom = 104.0f;
+        g.setColour(c.header.shell);
+        g.fillRect(face.withY(headerTop).withHeight(headerBottom - headerTop));
+        g.setColour(c.header.edge);
+        g.fillRect(face.withY(headerBottom).withHeight(1.0f));
+
+        if (!skin.isMidnight()) return;
+        for (const auto rail : { face.withHeight(17.0f), face.withY(face.getBottom() - 15.0f).withHeight(15.0f) })
+        {
+            g.setGradientFill({ c.enclosure.highlight, rail.getTopLeft(), c.header.shell, rail.getBottomLeft(), false });
+            g.fillRect(rail);
+            g.setColour(c.enclosure.rim.withAlpha(0.58f));
+            g.fillRect(rail.withTrimmedTop(2.0f).withHeight(1.0f));
+            g.setColour(c.control.base);
+            g.fillRect(rail.withY(rail.getBottom() - 2.0f).withHeight(2.0f));
+            g.setColour(c.enclosure.edge);
+            g.fillRect(rail.withY(rail.getBottom() - 6.0f).withHeight(1.0f));
+        }
+        for (const float x : { face.getX() + 10.0f, face.getRight() - 10.0f })
+        {
+            const float angle = x < face.getCentreX() ? 0.8f : -0.45f;
+            drawScrew(g, { x, face.getY() + 30.0f }, 6.0f, angle);
+            drawScrew(g, { x, face.getBottom() - 30.0f }, 6.0f, -angle);
+        }
+    }
 
     void paint(Graphics& g) override
     {
         const auto& c = skin.palette();
-        if (skin.isMidnight())
-            paintChassis(g);
-        else
-        {
-            g.fillAll(c.enclosure.body);
-            g.setColour(c.enclosure.rim);
-            g.drawRect(getLocalBounds().reduced(6), 1);
-            g.setColour(c.enclosure.edge);
-            g.drawRect(getLocalBounds().reduced(7), 1);
-        }
+        paintSectionDividers(g);
         paintHeader(g);
         paintOscillators(g);
-        paintPlate(g, filterPanel, "FILTER");
-        paintPlate(g, envPanel, "ENVELOPES");
-        paintPlate(g, lfoPanel, "LFO");
-        paintPlate(g, matrixPanel, "MOD TABLE");
+        paintSectionHeading(g, filterPanel, "FILTER");
+        paintSectionHeading(g, envPanel, "ENVELOPES");
+        paintSectionHeading(g, lfoPanel, "LFO");
+        paintSectionHeading(g, matrixPanel, "MOD TABLE");
         paintLfoAndEnvelope(g);
         const auto amountCaption = matrixAmountBounds.withY(matrixAmountBounds.getBottom() + 1).withHeight(15);
         label(g, "AMOUNT", amountCaption, 12.0f, c.legend.ink, juce::Justification::centred, true);
-        paintPlate(g, voicingPanel, "VOICING");
+        paintSectionHeading(g, voicingPanel, "VOICING");
         paintEffects(g);
         if (keys.isVisible()) paintPerformance(g);
         for (const auto& entry : sliders)
@@ -876,10 +941,11 @@ private:
                             : style == ButtonStyle::panic ? c.button.panic
                             : style == ButtonStyle::header ? c.button.header : c.button.panel;
             control->setColour(juce::TextButton::buttonColourId, face);
-            control->setColour(juce::TextButton::buttonOnColourId, c.button.active);
+            control->setColour(juce::TextButton::buttonOnColourId,
+                               style == ButtonStyle::display ? face : c.display.phosphor);
             control->setColour(juce::TextButton::textColourOffId,
                                style == ButtonStyle::panel ? c.legend.ink : c.header.ink);
-            control->setColour(juce::TextButton::textColourOnId, c.button.activeText);
+            control->setColour(juce::TextButton::textColourOnId, c.display.glass);
         }
         for (auto& row : oscillatorKnobs)
             row[volumeColumn]->setColour(juce::Slider::thumbColourId, c.control.warm);
@@ -968,6 +1034,7 @@ private:
             oscillatorKnobs[i][positionColumn]->setEnabled(!isFixedTable(current.table));
         }
         viewButton->setButtonText(stacked[engine] ? "STACK" : "CYCLE");
+        viewButton->setToggleState(stacked[engine], juce::dontSendNotification);
         phaseButton->setButtonText(osc.resetPhase ? "RESET" : "FREE");
         phaseButton->setToggleState(osc.resetPhase, juce::dontSendNotification);
         for (std::size_t i = 0; i < modeButtons.size(); ++i)
@@ -1363,6 +1430,7 @@ private:
         octaveUp->setVisible(show);
         const String action = show ? "Hide performance panel" : "Show performance panel";
         performanceButton->setButtonText(show ? "HIDE KEYS" : "SHOW KEYS");
+        performanceButton->setToggleState(show, juce::dontSendNotification);
         performanceButton->setTitle(action);
         performanceButton->setTooltip(action);
         setSize(designWidth, show ? designHeight : compactHeight);
@@ -1517,74 +1585,31 @@ private:
         repaint(keys.isVisible() ? performanceStatus : headerNotice);
     }
 
-    void paintChassis(Graphics& g) const
+    void paintSectionDividers(Graphics& g) const
     {
-        const auto& c = skin.palette();
-        const float bottom = static_cast<float>(getHeight());
-        juce::ColourGradient steel(c.enclosure.plate, 0.0f, 14.0f, c.enclosure.body, 0.0f, bottom - 12.0f, false);
-        steel.addColour(0.52, c.enclosure.plate.darker(0.10f));
-        g.setGradientFill(steel);
-        g.fillRect(getLocalBounds());
-        for (const auto rail : { Rectangle<int> { 0, 0, designWidth, 17 },
-                                 Rectangle<int> { 0, getHeight() - 15, designWidth, 15 } })
-        {
-            g.setGradientFill({ c.enclosure.highlight, rail.getTopLeft().toFloat(), c.header.shell,
-                                rail.getBottomLeft().toFloat(), false });
-            g.fillRect(rail);
-            g.setColour(c.enclosure.rim.withAlpha(0.58f));
-            g.fillRect(rail.withTrimmedTop(2).withHeight(1));
-            g.setColour(c.control.base);
-            g.fillRect(rail.withTop(rail.getBottom() - 2));
-            g.setColour(c.enclosure.edge);
-            g.fillRect(rail.withTop(rail.getBottom() - 6).withHeight(1));
-        }
-        g.setColour(c.legend.warm.withAlpha(0.68f));
-        g.fillRect(panelInset, 104, panelRight - panelInset, 1);
-        g.setColour(c.enclosure.edge);
-        g.fillRect(panelInset, 106, panelRight - panelInset, 1);
-
-        for (const float x : { 10.0f, designWidth - 10.0f })
-        {
-            const float angle = x < designWidth / 2 ? 0.8f : -0.45f;
-            drawScrew(g, { x, 30.0f }, 6.0f, angle);
-            drawScrew(g, { x, bottom - 30.0f }, 6.0f, -angle);
-        }
+        const std::array upperSections { oscPanel, filterPanel, envPanel, lfoPanel, matrixPanel };
+        const auto top = static_cast<float>(oscPanel.getY() + 8);
+        const auto bottom = static_cast<float>(oscPanel.getBottom() - 8);
+        g.setColour(skin.palette().enclosure.edge);
+        for (std::size_t i = 1; i < upperSections.size(); ++i)
+            g.drawVerticalLine((upperSections[i - 1].getRight() + upperSections[i].getX()) / 2, top, bottom);
+        g.drawHorizontalLine((oscPanel.getBottom() + lowerPanelY) / 2, panelInset, panelRight);
+        g.drawVerticalLine((voicingPanel.getRight() + effectsPanel.getX()) / 2, lowerPanelY + 8.0f,
+                           static_cast<float>(voicingPanel.getBottom() - 8));
+        if (keys.isVisible())
+            g.drawHorizontalLine(660, panelInset, panelRight);
     }
 
-    void paintPlate(Graphics& g, Rectangle<int> area, const String& heading) const
+    void paintSectionHeading(Graphics& g, Rectangle<int> area, const String& heading) const
     {
-        const auto& c = skin.palette();
-        if (skin.isMidnight())
-        {
-            g.setColour(c.enclosure.edge);
-            g.drawRect(area, 1);
-            if (area.getY() == oscPanel.getY())
-            {
-                g.fillRect(area.getX() + 13, area.getY() + 29, area.getWidth() - 26, 1);
-                g.setColour(c.legend.warm.withAlpha(0.84f));
-                g.fillRect(area.getX() + 13, area.getY() + 29, 32, 1);
-            }
-        }
-        else
-        {
-            constexpr float radius = 6.0f;
-            g.setColour(Colour(0x190c120f));
-            g.fillRoundedRectangle(area.toFloat().translated(0, 2), radius);
-            g.setColour(c.enclosure.plate);
-            g.fillRoundedRectangle(area.toFloat(), radius);
-            g.setColour(c.enclosure.edge);
-            g.drawRoundedRectangle(area.toFloat().reduced(0.5f), radius, 1.0f);
-            g.setColour(c.enclosure.highlight);
-            g.drawHorizontalLine(area.getY() + 1, static_cast<float>(area.getX() + 6), static_cast<float>(area.getRight() - 6));
-        }
         label(g, heading, { area.getX() + 13, area.getY() + 10, area.getWidth() - 26, 20 }, 17.0f,
-              c.legend.ink, juce::Justification::centredLeft, true);
+              skin.palette().legend.ink, juce::Justification::centredLeft, true);
     }
 
     void paintEffects(Graphics& g) const
     {
         const auto& c = skin.palette();
-        paintPlate(g, effectsPanel, "EFFECTS");
+        paintSectionHeading(g, effectsPanel, "EFFECTS");
         g.setColour(c.enclosure.edge);
         g.drawVerticalLine(reverbDivider, lowerPanelY + 13.0f, effectsPanel.getBottom() - 13.0f);
         const auto bankLabel = [&](const String& name, int x)
@@ -1601,14 +1626,6 @@ private:
         const auto& c = skin.palette();
         const auto phosphor = c.display.phosphor;
         const bool hardware = skin.isMidnight();
-        const float radius = hardware ? 1.0f : 6.0f;
-        const Rectangle<float> shell { panelInset, 19, panelRight - panelInset, 79 };
-        g.setColour(Colour(0x430a100d));
-        g.fillRoundedRectangle(shell.translated(0, 2), radius);
-        g.setColour(c.header.shell);
-        g.fillRoundedRectangle(shell, radius);
-        g.setColour(c.header.edge);
-        g.drawRoundedRectangle(shell.reduced(0.5f), radius, 1.0f);
         if (hardware)
         {
             g.setColour(c.legend.cool);
@@ -1661,7 +1678,7 @@ private:
     {
         if (!g.clipRegionIntersects(oscPanel)) return;
         const auto& c = skin.palette();
-        paintPlate(g, oscPanel, "TABLE OSC");
+        paintSectionHeading(g, oscPanel, "TABLE OSC");
         for (int column = 0; column < static_cast<int>(oscillatorColumns.size()); ++column)
         {
             const int x = oscillatorColumnX(column);
@@ -1745,13 +1762,9 @@ private:
     void paintLfoAndEnvelope(Graphics& g) const
     {
         const auto& c = skin.palette();
+        g.setColour(c.enclosure.edge);
         for (const auto& r : { envPanel, lfoPanel })
-        {
-            g.setColour(c.enclosure.edge);
             g.drawHorizontalLine(336, static_cast<float>(r.getX() + 12), static_cast<float>(r.getRight() - 12));
-            g.setColour(c.enclosure.highlight);
-            g.drawHorizontalLine(337, static_cast<float>(r.getX() + 12), static_cast<float>(r.getRight() - 12));
-        }
         for (int i = 0; i < 2; ++i)
         {
             label(g, i == 0 ? "FILTER ADSR" : "AMP ADSR", { 669, 155 + 190 * i, 181, 22 }, 12.5f, c.legend.cool,
@@ -1765,12 +1778,6 @@ private:
     {
         const auto& c = skin.palette();
         const bool hardware = skin.isMidnight();
-        const Rectangle<float> area { panelInset, 666, panelRight - panelInset, 112 };
-        const float radius = hardware ? 1.0f : 6.0f;
-        g.setColour(c.enclosure.performance);
-        g.fillRoundedRectangle(area, radius);
-        g.setColour(c.enclosure.edge.darker(0.1f));
-        g.drawRoundedRectangle(area.reduced(0.5f), radius, 1.0f);
         if (hardware)
         {
             display(g, { 120, 709, 259, 52 }, c);
@@ -1848,6 +1855,7 @@ Panel::Panel(Standalone& audio, std::function<void()> onDesignSizeChanged)
           repaint();
       }))
 {
+    setOpaque(true);
     addAndMakeVisible(*surface);
     const auto design = designSize();
     setSize(design.x, design.y);
@@ -1857,7 +1865,8 @@ Panel::~Panel() = default;
 
 juce::Point<int> Panel::designSize() const
 {
-    return { designWidth + (surface->hasWoodCheeks() ? 2 * woodCheekWidth : 0), surface->getHeight() };
+    const auto face = surface->faceplateBounds();
+    return { face.getWidth() + (surface->hasWoodCheeks() ? 2 * woodCheekWidth : 0), face.getHeight() };
 }
 
 bool Panel::playComputerKey(const juce::KeyPress& press) { return surface->playComputerKey(press); }
@@ -1866,21 +1875,19 @@ void Panel::releasePerformanceKeys() { surface->releasePerformanceKeys(); }
 
 void Panel::paint(Graphics& g)
 {
-    g.fillAll(surface->surroundColour());
-    if (surface->hasWoodCheeks())
-    {
-        g.addTransform(surface->getTransform());
-        const float height = static_cast<float>(surface->getHeight());
-        drawWoodCheek(g, { -woodCheekWidth, 0, woodCheekWidth, height }, false);
-        drawWoodCheek(g, { designWidth, 0, woodCheekWidth, height }, true);
-    }
+    const auto transform = surface->getTransform();
+    g.addTransform(transform);
+    surface->paintChassis(g, getLocalBounds().toFloat().transformedBy(transform.inverted()));
 }
 
 void Panel::resized()
 {
+    if (getLocalBounds().isEmpty()) return;
     const auto design = designSize();
     const float scale = std::min(getWidth() / static_cast<float>(design.x), getHeight() / static_cast<float>(design.y));
+    const float y = surface->hasTopRail() ? (getHeight() - design.y * scale) * 0.5f
+                                          : -surface->faceplateBounds().getY() * scale;
     surface->setTransform(juce::AffineTransform::scale(scale).translated(
-        (getWidth() - designWidth * scale) * 0.5f, (getHeight() - design.y * scale) * 0.5f));
+        (getWidth() - designWidth * scale) * 0.5f, y));
 }
 }
