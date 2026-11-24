@@ -9,7 +9,6 @@ namespace mot
 {
 constexpr int oscillatorCount = 3;
 constexpr int sourceCount = 8;
-constexpr int matrixColumnCount = 9;
 constexpr int presetCount = 9;
 constexpr int maxUnison = 4;
 constexpr int maxOscillatorSemitones = 24;
@@ -45,16 +44,6 @@ inline constexpr std::array<Destination, oscillatorCount> positionDestinations {
 inline constexpr std::array<Destination, oscillatorCount> pitchDestinations { pitchA, pitchB, pitchC };
 inline constexpr std::array<Destination, oscillatorCount> levelDestinations { levelA, levelB, levelC };
 inline constexpr std::array<Destination, oscillatorCount> panDestinations { panA, panB, panC };
-inline constexpr std::array<Destination, matrixColumnCount> defaultMatrixTargets {
-    positionA, positionB, positionC, pitchA, pitchB, pitchC, cutoff, resonance, pan
-};
-inline constexpr int defaultMatrixColumn(Destination target) noexcept
-{
-    for (int col = 0; col < matrixColumnCount; ++col)
-        if (defaultMatrixTargets[col] == target)
-            return col;
-    return -1;
-}
 inline constexpr std::array<const char*, sourceCount> sourceNames {
     "LFO 1", "LFO 2", "Filter Env", "Amp Env", "Velocity", "Key Track", "Mod Wheel", "Pressure"
 };
@@ -111,8 +100,7 @@ struct Patch
     Envelope filterEnv { 0.015f, 0.28f, 0.20f, 0.25f };
     Envelope ampEnv { 0.008f, 0.24f, 0.80f, 0.20f };
     std::array<Lfo, 2> lfos { Lfo {}, Lfo { 0.37f, 1.0f, Shape::triangle, false } };
-    std::array<Destination, matrixColumnCount> matrixTargets = defaultMatrixTargets;
-    std::array<std::array<float, matrixColumnCount>, sourceCount> matrix {};
+    std::array<std::array<std::optional<float>, destinationCount>, sourceCount> matrix {};
     Voicing voicing;
     TapeDelaySettings tapeDelay;
     ReverbSettings reverb;

@@ -116,7 +116,7 @@ private:
     std::array<Voice, polyphony> voices {};
     std::array<HeldNote, 256> heldNotes {};
     std::size_t heldCount = 0;
-    std::array<Route, sourceCount * matrixColumnCount> routes {};
+    std::array<Route, sourceCount * destinationCount> routes {};
     std::size_t routeCount = 0;
     std::array<float, maxUnison> unisonPan {}, unisonRatio { 1.0f };
     std::array<float, 2> globalPhases {};

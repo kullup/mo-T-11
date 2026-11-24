@@ -425,31 +425,10 @@ struct MatrixRoute
     }
 };
 
-int matrixColumn(const Patch& patch, Destination target)
+bool matrixTargetInUse(const Patch& patch, Destination target)
 {
-    const auto& targets = patch.matrixTargets;
-    const auto it = std::find(targets.begin(), targets.end(), target);
-    return it == targets.end() ? -1 : static_cast<int>(it - targets.begin());
-}
-
-bool matrixColumnIsEmpty(const Patch& patch, int column)
-{
-    return std::none_of(patch.matrix.begin(), patch.matrix.end(), [column](const auto& amounts)
-        { return amounts[column] != 0.0f; });
-}
-
-int unusedMatrixColumn(const Patch& patch)
-{
-    for (int column = 0; column < matrixColumnCount; ++column)
-        if (matrixColumnIsEmpty(patch, column))
-            return column;
-    return -1;
-}
-
-float matrixAmount(const Patch& patch, MatrixRoute route)
-{
-    const int column = matrixColumn(patch, route.target);
-    return column >= 0 ? patch.matrix[route.source][column] : 0.0f;
+    return std::any_of(patch.matrix.begin(), patch.matrix.end(), [target](const auto& row)
+        { return row[target].has_value(); });
 }
 
 String matrixAmountText(double amount)
@@ -485,13 +464,12 @@ public:
         for (int source = 0; source < sourceCount; ++source)
             for (int target = 0; target < destinationCount; ++target)
             {
+                const auto& amount = patch.matrix[source][target];
+                if (!amount) continue;
                 const MatrixRoute route { source, static_cast<Destination>(target) };
-                const float amount = matrixAmount(patch, route);
-                const bool selected = selection == route;
-                if (selected)
+                if (selection == route)
                     selectedRow = getNumRows();
-                if (amount != 0.0f || selected)
-                    rows.push_back({ route, amount });
+                rows.push_back({ route, *amount });
             }
 
         list.updateContent();
@@ -959,13 +937,13 @@ private:
     }
 
     template <typename T>
-    void edit(T change)
+    void edit(T change, bool revealMatrixSelection = false)
     {
         auto next = audio.patch();
         change(next.sound);
         audio.apply(std::move(next));
         edited = true;
-        syncControls();
+        syncControls(revealMatrixSelection);
     }
 
     void syncControls(bool revealMatrixSelection = false)
@@ -1010,7 +988,7 @@ private:
         matrixScreen.show(p, matrixSelection, revealMatrixSelection);
         matrixAmountKnob->setEnabled(matrixSelection.has_value());
         matrixClear->setEnabled(matrixSelection.has_value());
-        matrixTarget->setEnabled(matrixSelection && matrixAmount(p, *matrixSelection) != 0.0f);
+        matrixTarget->setEnabled(matrixSelection.has_value());
         presetMenu->setTitle("Factory presets. Current patch " + String::fromUTF8(audio.patch().name.c_str()));
         repaint();
     }
@@ -1187,27 +1165,21 @@ private:
         constexpr int buttonWidth = 78, buttonHeight = 29, buttonStep = buttonHeight + 8;
         const Rectangle<int> addRouteBounds { matrixAmountBounds.getCentreX() - buttonWidth / 2,
                                               matrixAmountBounds.getBottom() + 26, buttonWidth, buttonHeight };
-        matrixAdd = &button("ADD ROUTE", "Add a modulation route", addRouteBounds,
+        matrixAdd = &button("ADD ROUTE", "Add a modulation route at 0%", addRouteBounds,
                             [this] { showMatrixAddMenu(); });
         matrixTarget = &button("TARGET", "Change the destination for all routes that use this target",
                               addRouteBounds.translated(0, buttonStep), [this] { showMatrixTargets(); });
         matrixClear = &button("CLEAR", "Clear selected modulation route", addRouteBounds.translated(0, 2 * buttonStep),
                              [this] { clearMatrixRoute(); });
-        const auto read = [this](const Patch& p) { return matrixSelection ? matrixAmount(p, *matrixSelection) : 0.0f; };
+        const auto read = [this](const Patch& p)
+        {
+            return matrixSelection ? p.matrix[matrixSelection->source][matrixSelection->target].value_or(0.0f) : 0.0f;
+        };
         matrixAmountKnob = &slider("Modulation amount", {}, matrixAmountBounds, false, -1, 1, 0.01, read,
             [this](Patch& p, double value)
             {
-                if (!matrixSelection) return;
-                const auto route = *matrixSelection;
-                int column = matrixColumn(p, route.target);
-                if (column < 0 && value != 0.0)
-                {
-                    column = unusedMatrixColumn(p);
-                    if (column >= 0)
-                        p.matrixTargets[column] = route.target;
-                }
-                if (column >= 0)
-                    p.matrix[route.source][column] = static_cast<float>(value);
+                if (matrixSelection)
+                    p.matrix[matrixSelection->source][matrixSelection->target] = static_cast<float>(value);
             }, matrixAmountText);
     }
 
@@ -1222,14 +1194,7 @@ private:
         if (!matrixSelection) return;
         const auto route = *matrixSelection;
         matrixSelection.reset();
-        const auto& patch = audio.patch().sound;
-        if (matrixAmount(patch, route) != 0.0f)
-        {
-            const int column = matrixColumn(patch, route.target);
-            edit([route, column](Patch& p) { p.matrix[route.source][column] = 0.0f; });
-        }
-        else
-            syncControls();
+        edit([route](Patch& p) { p.matrix[route.source][route.target].reset(); });
     }
 
     template <typename AddTarget>
@@ -1251,7 +1216,6 @@ private:
     {
         keys.release();
         const auto& p = audio.patch().sound;
-        const bool hasFreeTarget = unusedMatrixColumn(p) >= 0;
         juce::PopupMenu menu;
         menu.setLookAndFeel(&skin);
         menu.addSectionHeader("Modulation source");
@@ -1260,23 +1224,24 @@ private:
             juce::PopupMenu destinations;
             addMatrixDestinations(destinations, [&](Destination target)
             {
-                const bool assigned = matrixColumn(p, target) >= 0;
-                const bool hasRoute = matrixAmount(p, { source, target }) != 0.0f;
                 destinations.addItem(1 + source * destinationCount + target, destinationNames[target],
-                                     assigned || hasFreeTarget, hasRoute);
+                                     true, p.matrix[source][target].has_value());
             });
             menu.addSubMenu(sourceNames[source], destinations);
         }
-        if (!hasFreeTarget)
-            menu.addSectionHeader("All nine destination slots in use");
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(matrixAdd),
             [safe = SafePointer<Surface>(this)](int id)
         {
             if (safe == nullptr || id <= 0) return;
             const MatrixRoute route { (id - 1) / destinationCount, static_cast<Destination>((id - 1) % destinationCount) };
             const auto& patch = safe->audio.patch().sound;
-            if (matrixColumn(patch, route.target) >= 0 || unusedMatrixColumn(patch) >= 0)
+            if (patch.matrix[route.source][route.target])
+            {
                 safe->selectMatrixRoute(route);
+                return;
+            }
+            safe->matrixSelection = route;
+            safe->edit([route](Patch& next) { next.matrix[route.source][route.target] = 0.0f; }, true);
         });
     }
 
@@ -1291,9 +1256,7 @@ private:
         addMatrixDestinations(menu, [&](Destination target)
         {
             const bool selected = target == route.target;
-            const int column = matrixColumn(p, target);
-            menu.addItem(target + 1, destinationNames[target], selected || column < 0 || matrixColumnIsEmpty(p, column),
-                         selected);
+            menu.addItem(target + 1, destinationNames[target], selected || !matrixTargetInUse(p, target), selected);
         });
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(matrixTarget).withMaximumNumColumns(1),
             [safe = SafePointer<Surface>(this), route](int id)
@@ -1301,18 +1264,14 @@ private:
             if (safe == nullptr || id <= 0 || !(safe->matrixSelection == route)) return;
             const auto target = static_cast<Destination>(id - 1);
             const auto& patch = safe->audio.patch().sound;
-            const int column = matrixColumn(patch, route.target);
-            const int targetColumn = matrixColumn(patch, target);
-            if (column < 0 || target == route.target || (targetColumn >= 0 && !matrixColumnIsEmpty(patch, targetColumn)))
+            if (!patch.matrix[route.source][route.target] || matrixTargetInUse(patch, target))
                 return;
             safe->matrixSelection = MatrixRoute { route.source, target };
-            safe->edit([column, targetColumn, target](Patch& next)
+            safe->edit([route, target](Patch& next)
             {
-                if (targetColumn >= 0)
-                    std::swap(next.matrixTargets[column], next.matrixTargets[targetColumn]);
-                else
-                    next.matrixTargets[column] = target;
-            });
+                for (auto& row : next.matrix)
+                    std::swap(row[route.target], row[target]);
+            }, true);
         });
     }
 

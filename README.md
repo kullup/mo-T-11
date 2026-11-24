@@ -1,6 +1,6 @@
 # MO-T 11
 
-MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, three oscillators per voice, 11 factory wavetables, nine factory patches, and a 72-route modulation matrix. The front panel follows [Mockup.png](Mockup.png).
+MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, three oscillators per voice, 11 factory wavetables, nine factory patches, and a 136-route modulation matrix. The front panel follows [Mockup.png](Mockup.png).
 
 ## Play
 
@@ -19,8 +19,8 @@ MO-T 11 is a standalone Windows x64 wavetable synth. It has 16 voices, three osc
 - **Filter and envelopes.** Click the filter mode to cycle low-pass, band-pass, and high-pass. Use cutoff, resonance, and drive to shape the signal. The amp ADSR controls the voice’s gain. Route **Filter Env** to **Cutoff** for a filter sweep, or to another destination for a different contour.
 - **LFOs.** Set rate and depth, then cycle sine, triangle, ramp, and square. **Free** runs continuously. **Key** starts a separate cycle for each played note.
 - **Effects.** Switch each effect between **Bypass** and **On**. **Tape Delay** has a 50 ms to 1.2 s delay time, feedback, and **Wear** for darker, less stable repeats. **Plate Reverb** has a **Decay** range of 250 ms to 20 s. Turn up **Damp** to make the high frequencies fade faster. Each effect has its own wet/dry **Mix**. Tape delay feeds the plate, and the patch stores both effects' settings and bypass states. **Panic** clears both tails.
-- **Mod Table.** The display lists active routes with the source, destination, and signed depth. Scroll to see more routes. Click a row or use the arrow keys to select it, then turn **Amount** to adjust its depth. **Add Route** lets you pick a source and destination. Set a depth to activate it. Use **Clear** to remove the selected route.
-- A patch can use up to nine distinct destinations across all eight sources. **Target** reassigns the selected destination for every route that uses it and preserves their amounts. Destinations include oscillator position, pitch, level and pan, plus filter cutoff, resonance and drive, overall pan, and per-voice amp gain. At full depth, pitch moves up to an octave, cutoff up to four octaves, and amp gain from silence to twice the voice level, depending on polarity.
+- **Mod Table.** Use **Add Route** to pick a source and destination. The route appears at 0% and can be adjusted with **Amount**. Scroll to see more routes. Click a row or use the arrow keys to select it. Use **Clear** to remove the selected route.
+- A patch can use one route for each combination of eight sources and 17 destinations. **Target** moves all routes that share the selected destination to an unused destination and preserves their depths. Destinations include oscillator position, pitch, level and pan, plus filter cutoff, resonance and drive, overall pan, and per-voice amp gain. At full depth, pitch moves up to an octave, cutoff up to four octaves, and amp gain from silence to twice the voice level, depending on polarity.
 
 ## Build and test
 

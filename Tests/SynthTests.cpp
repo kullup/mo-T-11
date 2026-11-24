@@ -103,11 +103,11 @@ void modulationAndPolyphony(const WaveBank& bank)
 {
     Synth synth(bank);
     Patch p;
-    p.matrix[velocity][defaultMatrixColumn(pan)] = 1.0f;
+    p.matrix[velocity][pan] = 1.0f;
     synth.setPatch(p);
     Block positive(synth, 2048, { Event {} });
     check(peak(positive.left) < 0.00001f && peak(positive.right) > 0.05f, "Positive pan route is incorrect");
-    p.matrix[velocity][defaultMatrixColumn(pan)] = -1.0f;
+    p.matrix[velocity][pan] = -1.0f;
     synth.prepare(48000);
     synth.setPatch(p);
     Block negative(synth, 2048, { { EventType::noteOn, 0, 1, 64 } });
@@ -146,7 +146,6 @@ void modulationAndPolyphony(const WaveBank& bank)
 void assignableMatrix(const WaveBank& bank)
 {
     Synth synth(bank);
-    constexpr int col = defaultMatrixColumn(positionA);
     for (int i = 0; i < oscillatorCount; ++i)
     {
         Patch p = sinePatch();
@@ -154,14 +153,13 @@ void assignableMatrix(const WaveBank& bank)
             osc.level = 0.0f;
         p.osc[i].table = sineTable;
         p.osc[i].level = 0.8f;
-        p.matrixTargets[col] = levelDestinations[i];
-        p.matrix[velocity][col] = -1.0f;
+        p.matrix[velocity][levelDestinations[i]] = -1.0f;
         synth.prepare(48000);
         synth.setPatch(p);
         const Block muted(synth, 4096, { Event {} });
         check(peak(muted.left) == 0.0f && peak(muted.right) == 0.0f, "Oscillator level route failed to mute it");
 
-        p.matrixTargets[col] = panDestinations[i];
+        std::swap(p.matrix[velocity][levelDestinations[i]], p.matrix[velocity][panDestinations[i]]);
         synth.setPatch(p);
         const Block repanned(synth, 4096);
         check(peak(repanned.left) > 0.05f && peak(repanned.right) < 0.00001f,
@@ -172,15 +170,14 @@ void assignableMatrix(const WaveBank& bank)
     synth.prepare(48000);
     synth.setPatch(p);
     const Block dry(synth, 4096, { Event {} });
-    p.matrixTargets[col] = filterDrive;
-    p.matrix[velocity][col] = 1.0f;
+    p.matrix[velocity][filterDrive] = 1.0f;
     synth.prepare(48000);
     synth.setPatch(p);
     const Block driven(synth, 4096, { Event {} });
     check(peak(driven.left) > 1.2f * peak(dry.left), "Filter drive modulation did not affect the signal");
 
-    p.matrixTargets[col] = ampGain;
-    p.matrix[velocity][col] = -1.0f;
+    p.matrix[velocity][filterDrive].reset();
+    p.matrix[velocity][ampGain] = -1.0f;
     synth.prepare(48000);
     synth.setPatch(p);
     const Block silent(synth, 4096, { Event {} });
@@ -210,7 +207,7 @@ void analogOscillators(const WaveBank& bank)
     Patch p = sinePatch();
     p.osc[0].level = 0.0f;
     p.osc[2] = { sineTable, 0.25f, 0.8f, 0, 0, 0.0f, -1.0f };
-    p.matrix[velocity][defaultMatrixColumn(pitchC)] = -1.0f;
+    p.matrix[velocity][pitchC] = -1.0f;
     Synth synth(bank);
     synth.setPatch(p);
     const Event a440 { EventType::noteOn, 0, 1, 69 };
@@ -220,12 +217,12 @@ void analogOscillators(const WaveBank& bank)
           "Oscillator C did not render with its pan and pitch route");
 
     p.osc[2].table = pulseTable;
-    p.matrix[velocity][defaultMatrixColumn(positionC)] = 0.5f;
+    p.matrix[velocity][positionC] = 0.5f;
     synth.prepare(48000);
     synth.setPatch(p);
     const Block modulated(synth, 4800, { a440 });
     p.osc[2].position = 0.75f;
-    p.matrix[velocity][defaultMatrixColumn(positionC)] = 0.0f;
+    p.matrix[velocity][positionC] = 0.0f;
     synth.prepare(48000);
     synth.setPatch(p);
     const Block direct(synth, 4800, { a440 });
@@ -433,42 +430,54 @@ void patches()
     }
     NamedPatch custom { "Custom \"01\"", factoryPresets()[2].sound };
     custom.sound.osc[2] = { pulseTable, 0.67f, 0.55f, -1, 3, 2.5f, -0.4f, 0.2f, false };
-    custom.sound.matrix[pressure][defaultMatrixColumn(pan)] = -0.987f;
-    custom.sound.matrix[wheel][defaultMatrixColumn(positionC)] = 0.27f;
-    custom.sound.matrix[velocity][defaultMatrixColumn(pitchC)] = -0.31f;
+    custom.sound.matrix[pressure][pan] = -0.987f;
+    custom.sound.matrix[wheel][positionC] = 0.27f;
+    custom.sound.matrix[velocity][pitchC] = -0.31f;
     custom.sound.voicing = { PlayMode::legato, 0.123f, 4, 35.0f, 0.83f };
     const auto encoded = encodePatch(custom);
     const auto decoded = decodePatch(encoded);
     check(decoded && encodePatch(*decoded) == encoded, "Custom patch failed round-trip");
     check(!decodePatch(encoded.substr(0, encoded.size() / 2)), "Truncated patch was accepted");
-    check(!decodePatch("MOT11 7" + encoded.substr(7)), "Unknown patch version was accepted");
+    check(!decodePatch("MOT11 8" + encoded.substr(7)), "Unknown patch version was accepted");
     check(!decodePatch(encoded + "junk"), "Unexpected trailing content was accepted");
     const auto voicing = encoded.find("VOICING ");
-    const auto targets = encoded.find("TARGETS ", voicing);
-    const auto matrix = encoded.find("MATRIX\n", targets);
-    const auto tape = encoded.find("TAPE_DELAY ", matrix);
+    const auto routes = encoded.find("ROUTES ", voicing);
+    const auto tape = encoded.find("TAPE_DELAY ", routes);
     const auto third = encoded.find("OSC_C "), filter = encoded.find("FILTER ");
-    const auto oldMatrix = [&](Destination last)
+    const auto oldMatrix = [&](const auto& targets)
     {
         std::ostringstream out;
         out << "MATRIX\n" << std::setprecision(std::numeric_limits<float>::max_digits10);
         for (const auto& row : custom.sound.matrix)
         {
-            for (int i = 0; i <= last; ++i)
-                out << row[defaultMatrixColumn(static_cast<Destination>(i))] << ' ';
+            for (auto target : targets)
+                out << row[target].value_or(0.0f) << ' ';
             out << '\n';
         }
         return out.str();
     };
-    const auto legacy4 = decodePatch("MOT11 4" + encoded.substr(7, targets - 7) + oldMatrix(pitchC));
+    constexpr std::array fixedTargets { positionA, positionB, pitchA, pitchB, cutoff, resonance, pan };
+    const auto fixedMatrix = oldMatrix(fixedTargets);
+    const auto thirdOscMatrix = oldMatrix(std::array { positionA, positionB, pitchA, pitchB, cutoff, resonance,
+                                                      pan, positionC, pitchC });
+    const auto assignableMatrix = oldMatrix(std::array { positionA, positionB, positionC, pitchA, pitchB, pitchC,
+                                                       cutoff, resonance, pan });
+    const auto legacyHeader = encoded.substr(7, routes - 7);
+    const auto legacy4 = decodePatch("MOT11 4" + legacyHeader + thirdOscMatrix);
     check(legacy4 && encodePatch(*legacy4) == encoded, "Version 4 patch failed to migrate");
-    const auto legacy5 = decodePatch("MOT11 5" + encoded.substr(7, tape - 7));
+    const auto legacy5 = decodePatch("MOT11 5" + legacyHeader + "TARGETS 0 1 7 2 3 8 4 5 6\n" + assignableMatrix);
     check(legacy5 && encodePatch(*legacy5) == encoded, "Version 5 patch did not load with both effects bypassed");
     custom.sound.tapeDelay = { true, maxTapeTime, maxTapeFeedback, 0.71f, 0.27f };
     custom.sound.reverb = { true, 0.21f, 0.87f, 0.52f };
     const auto withEffects = encodePatch(custom);
     const auto decodedEffects = decodePatch(withEffects);
     check(decodedEffects && encodePatch(*decodedEffects) == withEffects, "Effect settings failed round-trip");
+    auto reassigned = custom;
+    for (auto& row : reassigned.sound.matrix)
+        std::swap(row[pan], row[ampGain]);
+    const auto legacy6 = decodePatch("MOT11 6" + legacyHeader + "TARGETS 0 1 7 2 3 8 4 5 16\n"
+                                    + assignableMatrix + withEffects.substr(tape));
+    check(legacy6 && encodePatch(*legacy6) == encodePatch(reassigned), "Reassigned version 6 routes failed to migrate");
     check(!decodePatch(withEffects.substr(0, tape) + "TAPE_DELAY 1 0.32 1 0.8 0.1\nREVERB 1 1 0.9 1\n"),
           "Out-of-range tape feedback was accepted");
     custom.sound.tapeDelay = {};
@@ -476,25 +485,32 @@ void patches()
     auto migrated = custom;
     migrated.sound.osc[2] = Patch {}.osc[2];
     for (auto& row : migrated.sound.matrix)
-        row[defaultMatrixColumn(positionC)] = row[defaultMatrixColumn(pitchC)] = 0.0f;
+    {
+        row[positionC].reset();
+        row[pitchC].reset();
+    }
     const auto oldPrefix = encoded.substr(7, third - 7) + encoded.substr(filter, voicing - filter);
-    const auto legacy2 = decodePatch("MOT11 2" + oldPrefix + encoded.substr(voicing, targets - voicing) + oldMatrix(pan));
+    const auto legacy2 = decodePatch("MOT11 2" + oldPrefix + encoded.substr(voicing, routes - voicing) + fixedMatrix);
     check(legacy2 && encodePatch(*legacy2) == encodePatch(migrated), "Version 2 patch failed to migrate");
     migrated.sound.voicing = {};
-    const auto legacy1 = decodePatch("MOT11 1" + oldPrefix + oldMatrix(pan));
+    const auto legacy1 = decodePatch("MOT11 1" + oldPrefix + fixedMatrix);
     check(legacy1 && encodePatch(*legacy1) == encodePatch(migrated), "Version 1 patch failed to migrate");
-    check(!decodePatch(encoded.substr(0, voicing) + "VOICING 2 0.1 5 50 1\n" + encoded.substr(targets)),
+    check(!decodePatch(encoded.substr(0, voicing) + "VOICING 2 0.1 5 50 1\n" + encoded.substr(routes)),
           "Out-of-range unison was accepted");
-    check(!decodePatch(encoded.substr(0, targets) + "TARGETS 0 1 7 2 3 8 4 5 99\n" + encoded.substr(matrix)),
-          "Out-of-range matrix destination was accepted");
-    check(!decodePatch(encoded.substr(0, targets) + "TARGETS 0 1 7 2 3 8 4 5 0\n" + encoded.substr(matrix)),
-          "Duplicate matrix destination was accepted");
+    check(!decodePatch("MOT11 5" + legacyHeader + "TARGETS 0 1 7 2 3 8 4 5 99\n" + assignableMatrix),
+          "Out-of-range legacy destination was accepted");
+    check(!decodePatch("MOT11 5" + legacyHeader + "TARGETS 0 1 7 2 3 8 4 5 0\n" + assignableMatrix),
+          "Duplicate legacy destination was accepted");
+    check(!decodePatch(encoded.substr(0, routes) + "ROUTES 2\n0 0 0\n0 0 0.5\n" + encoded.substr(tape)),
+          "Duplicate source-destination route was accepted");
 
-    custom.sound.matrixTargets[defaultMatrixColumn(pan)] = ampGain;
-    const auto reassigned = encodePatch(custom);
-    const auto decodedReassigned = decodePatch(reassigned);
-    check(decodedReassigned && encodePatch(*decodedReassigned) == reassigned,
-          "Reassigned target and route depths failed to round-trip");
+    NamedPatch fullMatrix { "Full Matrix", {} };
+    for (auto& row : fullMatrix.sound.matrix)
+        for (int target = 0; target < destinationCount; ++target)
+            row[target] = target % 2 == 0 ? 0.0f : -0.25f;
+    const auto decodedFullMatrix = decodePatch(encodePatch(fullMatrix));
+    check(decodedFullMatrix && decodedFullMatrix->sound.matrix == fullMatrix.sound.matrix,
+          "A full matrix with zero-depth routes failed to round-trip");
 
     custom.sound.osc[0].semitone = -24;
     custom.sound.osc[1].semitone = 24;

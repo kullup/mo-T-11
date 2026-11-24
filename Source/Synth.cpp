@@ -274,9 +274,12 @@ void Synth::setPatch(const Patch& newPatch) noexcept
     }
     routeCount = 0;
     for (int from = 0; from < sourceCount; ++from)
-        for (int col = 0; col < matrixColumnCount; ++col)
-            if (patch.matrix[from][col] != 0.0f)
-                routes[routeCount++] = { from, patch.matrixTargets[col], patch.matrix[from][col] };
+        for (int to = 0; to < destinationCount; ++to)
+        {
+            const float amount = patch.matrix[from][to].value_or(0.0f);
+            if (amount != 0.0f)
+                routes[routeCount++] = { from, static_cast<Destination>(to), amount };
+        }
     changeVoiceMode(previousMode);
     if (patch.voicing.glide <= 0.0f)
         for (auto& v : voices)
