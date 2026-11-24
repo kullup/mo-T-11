@@ -128,16 +128,46 @@ void pixels(Graphics& g, const String& source, float x, float y, float scale, Co
     }
 }
 
+juce::ColourGradient panelLightGradient(Rectangle<float> bounds, Colour highlight, Colour shade)
+{
+    constexpr float horizontal = 0.74f;
+    // Project the opposite corner onto the light direction so wide and tall parts share the same angle.
+    const float span = (horizontal * bounds.getWidth() + bounds.getHeight()) / (1.0f + horizontal * horizontal);
+    const auto topLeft = bounds.getTopLeft();
+    return { highlight, topLeft, shade, topLeft.translated(horizontal * span, span), false };
+}
+
+void setRimLighting(Graphics& g, Rectangle<float> bounds, Colour highlight, Colour edge, Colour shade)
+{
+    auto light = panelLightGradient(bounds, highlight, shade);
+    light.addColour(0.40, edge);
+    g.setGradientFill(light);
+}
+
+void drawControlShadow(Graphics& g, Rectangle<float> bounds, float cornerRadius, Colour colour)
+{
+    juce::Path silhouette;
+    silhouette.addRoundedRectangle(bounds, cornerRadius);
+    juce::DropShadow(colour, 2, { 1, 2 }).drawForPath(g, silhouette);
+}
+
 void display(Graphics& g, Rectangle<int> bounds, const PanelPalette& palette)
 {
     const auto& colours = palette.display;
+    const auto bezel = bounds.toFloat();
     g.setColour(colours.bezel);
-    g.fillRoundedRectangle(bounds.toFloat(), 5.0f);
-    g.setColour(colours.edge);
-    g.drawRoundedRectangle(bounds.toFloat().reduced(0.5f), 5.0f, 1.0f);
+    g.fillRoundedRectangle(bezel, 5.0f);
+    setRimLighting(g, bezel, colours.edge.interpolatedWith(juce::Colours::white, 0.24f),
+                   colours.edge, colours.edge.darker(0.35f));
+    g.drawRoundedRectangle(bezel.reduced(0.5f), 5.0f, 1.0f);
+
     const auto inner = bounds.reduced(4);
+    const auto glass = inner.toFloat();
+    const auto lip = glass.expanded(0.85f);
+    g.setGradientFill(panelLightGradient(lip, juce::Colours::black.withAlpha(0.72f), juce::Colours::transparentBlack));
+    g.drawRoundedRectangle(lip, 3.85f, 1.0f);
     g.setColour(colours.glass);
-    g.fillRoundedRectangle(inner.toFloat(), 3.0f);
+    g.fillRoundedRectangle(glass, 3.0f);
     g.setColour(colours.scanline);
     for (int y = inner.getY() + 3; y < inner.getBottom() - 2; y += 3)
         g.drawHorizontalLine(y, static_cast<float>(inner.getX() + 1), static_cast<float>(inner.getRight() - 1));
@@ -147,8 +177,8 @@ void drawScrew(Graphics& g, juce::Point<float> centre, float diameter, float ang
 {
     const auto well = Rectangle<float>(diameter, diameter).withCentre(centre);
     g.setColour(Colour(0xcf1a1009));
-    g.fillEllipse(well.expanded(1.1f).translated(0.0f, 0.65f));
-    g.setGradientFill({ Colour(0xffa29681), well.getTopLeft(), Colour(0xff423c32), well.getBottomRight(), false });
+    g.fillEllipse(well.expanded(1.1f).translated(0.35f, 0.65f));
+    g.setGradientFill(panelLightGradient(well, Colour(0xffa29681), Colour(0xff423c32)));
     g.fillEllipse(well);
     g.setColour(Colour(0xff271e17));
     g.drawLine({ centre.getPointOnCircumference(diameter * 0.35f, angle),
@@ -260,9 +290,11 @@ public:
                           float start, float end, juce::Slider& slider) override
     {
         const auto& c = palette();
+        const bool hardware = isMidnight();
         const float diameter = static_cast<float>(std::min(w, h)) - 15.0f;
         const juce::Point<float> centre { x + w * 0.5f, y + h * 0.5f };
         const auto bounds = Rectangle<float>(diameter, diameter).withCentre(centre);
+        const auto cap = hardware ? bounds.reduced(diameter * 0.096f).translated(0.0f, -0.6f) : bounds;
         const bool customFace = slider.isColourSpecified(juce::Slider::thumbColourId);
         const auto face = customFace ? slider.findColour(juce::Slider::thumbColourId) : c.control.face;
         const auto radialPoint = [&](float angle, float distance)
@@ -274,17 +306,16 @@ public:
         {
             const float angle = start + (end - start) * static_cast<float>(i) / 10.0f;
             const bool major = i == 0 || i == 5 || i == 10;
-            const float inner = isMidnight() && !major ? 4.0f : 3.0f;
+            const float inner = hardware && !major ? 4.0f : 3.0f;
             g.setColour(major ? c.legend.quiet : c.enclosure.edge);
             g.drawLine({ radialPoint(angle, diameter * 0.5f + inner), radialPoint(angle, diameter * 0.5f + 6) }, 1.0f);
         }
-        if (isMidnight())
+        drawControlShadow(g, bounds, diameter * 0.5f, hardware ? Colour(0x74000000) : Colour(0x490c120f));
+        if (hardware)
         {
-            g.setColour(Colour(0x99000000));
-            g.fillEllipse(bounds.expanded(1.0f).translated(0.0f, 3.0f));
-            g.setGradientFill({ face.brighter(0.18f), bounds.getTopLeft(), c.control.base,
-                                bounds.getBottomLeft(), false });
-            g.fillEllipse(bounds.translated(0.0f, 1.4f));
+            const auto sidewall = bounds.translated(0.55f, 1.2f);
+            g.setGradientFill(panelLightGradient(sidewall, face.brighter(0.18f), c.control.base));
+            g.fillEllipse(sidewall);
             const int flutes = diameter < 30.0f ? 18 : 30;
             for (int i = 0; i < flutes; ++i)
             {
@@ -292,38 +323,33 @@ public:
                 g.setColour(i % 2 == 0 ? c.control.rim.withAlpha(0.48f) : c.control.base.withAlpha(0.8f));
                 g.drawLine({ radialPoint(angle, diameter * 0.42f), radialPoint(angle, diameter * 0.49f) }, 1.1f);
             }
-            const auto cap = bounds.reduced(diameter * 0.096f).translated(0.0f, -0.6f);
-            g.setGradientFill({ face.brighter(0.12f), cap.getTopLeft(), face.darker(0.57f), cap.getBottomLeft(), false });
-            g.fillEllipse(cap);
-            g.setColour(face.brighter(0.34f));
-            g.drawEllipse(cap.reduced(0.4f), 0.85f);
-            if (slider.isMouseOverOrDragging() || slider.hasKeyboardFocus(true))
-            {
-                g.setColour(c.legend.cool);
-                g.drawEllipse(bounds, slider.hasKeyboardFocus(true) ? 1.35f : 0.85f);
-            }
         }
         else
         {
-            g.setColour(Colour(0x290c120f));
-            g.fillEllipse(bounds.expanded(1.0f).translated(0.0f, 3.4f));
             g.setColour(customFace ? face.darker(0.42f) : c.control.base);
-            g.fillEllipse(bounds.translated(0.0f, 1.5f));
-            g.setGradientFill({ face, bounds.getTopLeft(), customFace ? face.darker(0.22f) : c.control.shade,
-                                bounds.getBottomRight(), false });
-            g.fillEllipse(bounds);
-            g.setColour(customFace ? face.brighter(0.35f) : c.control.rim);
-            g.drawEllipse(bounds.reduced(0.75f), 1.15f);
-            g.setColour(slider.isMouseOverOrDragging() || slider.hasKeyboardFocus(true)
-                            ? c.legend.cool : c.legend.quiet.withAlpha(0.22f));
-            g.drawEllipse(bounds, slider.hasKeyboardFocus(true) ? 1.65f : 1.0f);
+            g.fillEllipse(bounds.translated(0.55f, 1.2f));
+        }
+
+        const auto shade = hardware ? face.darker(0.48f) : customFace ? face.darker(0.22f) : c.control.shade;
+        g.setGradientFill(panelLightGradient(cap, face.interpolatedWith(juce::Colours::white, 0.11f), shade));
+        g.fillEllipse(cap);
+        const auto rim = face.interpolatedWith(c.control.rim, 0.25f);
+        setRimLighting(g, cap, rim.interpolatedWith(juce::Colours::white, 0.43f),
+                       rim.darker(0.16f), shade.darker(0.25f));
+        g.drawEllipse(cap.reduced(0.55f), 1.0f);
+
+        const bool focused = slider.hasKeyboardFocus(true);
+        if (focused || slider.isMouseOverOrDragging())
+        {
+            g.setColour(c.legend.cool);
+            g.drawEllipse(bounds, focused ? 1.55f : 0.9f);
         }
         const float angle = start + position * (end - start);
         const auto indicator = customFace ? c.control.accentPointer : c.control.pointer;
         g.setColour(slider.isEnabled() ? indicator : c.legend.quiet.withAlpha(0.48f));
-        g.drawLine({ radialPoint(angle, diameter * (isMidnight() ? 0.19f : 0.14f)),
+        g.drawLine({ radialPoint(angle, diameter * (hardware ? 0.19f : 0.14f)),
                      radialPoint(angle, diameter * 0.38f) }, diameter > 70 ? 3.3f : 2.35f);
-        if (!isMidnight()) g.fillEllipse(Rectangle<float>(3.0f, 3.0f).withCentre(centre));
+        if (!hardware) g.fillEllipse(Rectangle<float>(3.0f, 3.0f).withCentre(centre));
     }
 
     void drawLinearSlider(Graphics& g, int x, int y, int w, int h, float position, float, float,
@@ -354,16 +380,19 @@ public:
             g.fillRect(cx - 1.0f, std::min(reference, position), 2.0f, std::abs(reference - position));
         }
         const auto cap = Rectangle<float>(static_cast<float>(std::min(w - 4, 25)), 15.0f).withCentre({ cx, position });
-        g.setColour(Colour(0x410c120f));
-        g.fillRoundedRectangle(cap.translated(0.0f, 2.0f), capRadius);
-        if (isMidnight())
-            g.setGradientFill({ c.control.face.brighter(0.36f), cap.getTopLeft(), c.control.shade,
-                                cap.getBottomLeft(), false });
-        else
-            g.setColour(c.control.face);
+        drawControlShadow(g, cap, capRadius, Colour(0x490c120f));
+        const auto face = c.control.face;
+        const auto shade = isMidnight() ? c.control.shade : face.darker(0.12f);
+        g.setGradientFill(panelLightGradient(cap, face.interpolatedWith(juce::Colours::white, 0.11f), shade));
         g.fillRoundedRectangle(cap, capRadius);
-        g.setColour(slider.hasKeyboardFocus(true) ? c.legend.cool : c.enclosure.edge.darker(0.2f));
-        g.drawRoundedRectangle(cap, capRadius, 1.0f);
+        setRimLighting(g, cap, face.interpolatedWith(juce::Colours::white, 0.38f),
+                       face.darker(0.20f), shade.darker(0.27f));
+        g.drawRoundedRectangle(cap.reduced(0.5f), capRadius, 1.0f);
+        if (slider.hasKeyboardFocus(true))
+        {
+            g.setColour(c.legend.cool);
+            g.drawRoundedRectangle(cap, capRadius, 1.0f);
+        }
         g.setColour(c.control.pointer);
         g.drawLine(cap.getX() + 5.0f, position, cap.getRight() - 5.0f, position, 1.6f);
     }
@@ -398,8 +427,9 @@ public:
         const auto fill = pressed ? base.interpolatedWith(phosphor, 0.22f).darker(0.10f)
                                   : enabled && highlighted ? base.brighter(0.10f) : base;
 
-        g.setColour(Colour(0xff101611).withAlpha(isMidnight() ? 0.72f * opacity : 0.32f * opacity));
-        g.fillRoundedRectangle(area.translated(0.0f, 2.0f), radius);
+        const float shadowOpacity = (isMidnight() ? 0.48f : 0.33f) * opacity;
+        drawControlShadow(g, area.reduced(0.6f), radius - 0.6f,
+                          Colour(0xff101611).withAlpha(shadowOpacity * (pressed ? 0.6f : 1.0f)));
         if (lit || pressed)
         {
             g.setColour(phosphor.withAlpha(lit ? 0.42f : 0.24f));
@@ -407,13 +437,12 @@ public:
         }
 
         const auto top = fill.interpolatedWith(juce::Colours::white, lit ? 0.28f : 0.14f);
-        g.setGradientFill({ top.withAlpha(opacity), face.getTopLeft(),
-                            fill.darker(lit ? 0.16f : 0.23f).withAlpha(opacity), face.getBottomLeft(), false });
+        g.setGradientFill(panelLightGradient(face, top.withAlpha(opacity),
+                                            fill.darker(lit ? 0.16f : 0.23f).withAlpha(opacity)));
         g.fillRoundedRectangle(face, radius);
-        g.setColour((lit ? phosphor.darker(0.40f) : offColour.contrasting(0.36f)).withMultipliedAlpha(opacity));
-        g.drawRoundedRectangle(face, radius, 0.8f);
-        g.setColour(juce::Colours::white.withAlpha((lit ? 0.65f : 0.34f) * opacity));
-        g.fillRect(face.getX() + radius, face.getY() + 1.0f, face.getWidth() - 2.0f * radius, 0.8f);
+        setRimLighting(g, face, top.interpolatedWith(juce::Colours::white, 0.34f).withAlpha(opacity),
+                       fill.darker(0.21f).withAlpha(opacity), fill.darker(0.42f).withAlpha(opacity));
+        g.drawRoundedRectangle(face.reduced(0.4f), radius, 0.8f);
 
         if (focused)
         {
@@ -730,8 +759,8 @@ private:
         const auto face = area.withTrimmedBottom(black ? 4.0f : 3.0f);
         const auto keyColour = down ? c.display.phosphor : black ? c.keys.black : c.keys.white;
         if (skin.isMidnight())
-            g.setGradientFill({ keyColour.brighter(black ? 0.28f : 0.12f), face.getTopLeft(),
-                                keyColour.darker(black ? 0.23f : 0.07f), face.getBottomLeft(), false });
+            g.setGradientFill(panelLightGradient(face, keyColour.brighter(black ? 0.28f : 0.12f),
+                                                 keyColour.darker(black ? 0.23f : 0.07f)));
         else
             g.setColour(keyColour);
         g.fillRoundedRectangle(face, 2.75f);
