@@ -15,6 +15,7 @@ constexpr int maxOscillatorSemitones = 24;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 constexpr float minTapeTime = 0.05f, maxTapeTime = 1.2f, maxTapeFeedback = 0.9f;
 constexpr float minPlateDecay = 0.25f, maxPlateDecay = 20.0f;
+constexpr int minArpTempo = 40, maxArpTempo = 240;
 
 float plateDecaySeconds(float normalized) noexcept;
 
@@ -33,6 +34,7 @@ enum Wavetable
 enum class FilterMode { lowPass, bandPass, highPass };
 enum class Shape { sine, triangle, ramp, square };
 enum class PlayMode { poly, mono, legato };
+enum class ArpDirection { up, down, upDown };
 
 inline constexpr std::array<const char*, tableCount> tableNames {
     "Basic Shapes", "Pulse Width", "Hollow Body", "Harmonic Ladder", "Folded Sine", "Glass Formants",
@@ -90,6 +92,13 @@ struct ReverbSettings
     float decay = 0.55f, damping = 0.42f, mix = 0.25f;
 };
 
+struct ArpSettings
+{
+    bool enabled = false;
+    int tempo = 120;
+    ArpDirection direction = ArpDirection::up;
+};
+
 struct Patch
 {
     std::array<Oscillator, oscillatorCount> osc {
@@ -104,6 +113,7 @@ struct Patch
     Voicing voicing;
     TapeDelaySettings tapeDelay;
     ReverbSettings reverb;
+    ArpSettings arp;
 };
 
 struct NamedPatch { std::string name; Patch sound; };

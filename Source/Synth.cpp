@@ -252,6 +252,7 @@ void Synth::prepare(double newRate)
     tableStep = seconds / 0.012f;
     voices = {};
     heldCount = 0;
+    resetArp();
     globalPhases = {};
     age = 0;
     controlStep = 0;
@@ -263,7 +264,9 @@ void Synth::prepare(double newRate)
 void Synth::setPatch(const Patch& newPatch) noexcept
 {
     const auto previousMode = patch.voicing.mode;
+    const auto previousArp = patch.arp;
     patch = newPatch;
+    patch.arp.tempo = std::clamp(patch.arp.tempo, minArpTempo, maxArpTempo);
     const int count = std::clamp(patch.voicing.unison, 1, maxUnison);
     patch.voicing.unison = count;
     for (int i = 0; i < count; ++i)
@@ -280,7 +283,30 @@ void Synth::setPatch(const Patch& newPatch) noexcept
             if (amount != 0.0f)
                 routes[routeCount++] = { from, static_cast<Destination>(to), amount };
         }
-    changeVoiceMode(previousMode);
+    if (previousArp.enabled != patch.arp.enabled)
+    {
+        resetArp();
+        for (auto& voice : voices)
+            retire(voice);
+        if (!patch.arp.enabled)
+        {
+            if (patch.voicing.mode == PlayMode::poly)
+                for (std::size_t i = 0; i < heldCount; ++i)
+                    startVoice(heldNotes[i].on, heldNotes[i].held);
+            else
+                updateMono(false);
+        }
+    }
+    else if (patch.arp.enabled)
+    {
+        if (previousArp.direction != patch.arp.direction)
+        {
+            arpLastNote = -1;
+            arpAscending = true;
+        }
+    }
+    else
+        changeVoiceMode(previousMode);
     if (patch.voicing.glide <= 0.0f)
         for (auto& v : voices)
             if (v.glideSamples > 0)
@@ -307,15 +333,17 @@ void Synth::retire(Voice& v) noexcept
     }
 }
 
-void Synth::startVoice(const Event& e, bool held) noexcept
+Synth::Voice& Synth::startVoice(const Event& e, bool held) noexcept
 {
     Voice* selected = nullptr;
-    for (auto& v : voices)
-        if (v.amp.stage != Env::idle && v.port == e.port && v.channel == e.channel && v.note == e.note)
-        {
-            selected = &v;
-            break;
-        }
+    // Arp steps can ring through the next trigger, including repeated pitches.
+    if (!patch.arp.enabled)
+        for (auto& v : voices)
+            if (v.amp.stage != Env::idle && v.port == e.port && v.channel == e.channel && v.note == e.note)
+            {
+                selected = &v;
+                break;
+            }
 
     if (selected == nullptr)
     {
@@ -333,6 +361,7 @@ void Synth::startVoice(const Event& e, bool held) noexcept
 
     trigger(*selected, e);
     selected->held = held;
+    return *selected;
 }
 
 void Synth::setVoiceNote(Voice& v, const Event& e, double glideFrom) noexcept
@@ -413,6 +442,76 @@ void Synth::trackNotes(const Event& e) noexcept
     }
 }
 
+const Event& Synth::nextArpNote() noexcept
+{
+    const Event* lowest = &heldNotes[heldCount - 1].on;
+    const Event* highest = lowest;
+    const Event* higher = nullptr;
+    const Event* lower = nullptr;
+    // Start with the most recent key so tied pitches keep its source and expression.
+    for (std::size_t i = heldCount; i > 0; --i)
+    {
+        const auto& on = heldNotes[i - 1].on;
+        if (on.note < lowest->note) lowest = &on;
+        if (on.note > highest->note) highest = &on;
+        if (on.note > arpLastNote && (higher == nullptr || on.note < higher->note)) higher = &on;
+        if (on.note < arpLastNote && (lower == nullptr || on.note > lower->note)) lower = &on;
+    }
+
+    if (patch.arp.direction == ArpDirection::up)
+        return higher != nullptr ? *higher : *lowest;
+    if (patch.arp.direction == ArpDirection::down)
+        return lower != nullptr ? *lower : *highest;
+    if (arpAscending && higher != nullptr)
+        return *higher;
+    if (!arpAscending && lower != nullptr)
+        return *lower;
+    arpAscending = !arpAscending;
+    if (arpAscending)
+        return higher != nullptr ? *higher : *lowest;
+    return lower != nullptr ? *lower : *highest;
+}
+
+void Synth::endArpGate() noexcept
+{
+    if (arpVoice == polyphony)
+        return;
+    auto& voice = voices[arpVoice];
+    voice.held = false;
+    voice.amp.noteOff();
+    voice.filter.noteOff();
+    arpVoice = polyphony;
+}
+
+void Synth::resetArp() noexcept
+{
+    endArpGate();
+    arpPhase = 0.0;
+    arpRunning = false;
+    arpLastNote = -1;
+    arpAscending = true;
+}
+
+void Synth::tickArp() noexcept
+{
+    // One sixteenth note is 15 / BPM seconds. Accumulating BPM keeps exact
+    // sample boundaries at integer tempos and carries fractional timing forward.
+    const double step = 15.0 * rate;
+    if (arpPhase >= 0.70 * step)
+        endArpGate();
+    if (!arpRunning || arpPhase >= step)
+    {
+        if (arpRunning)
+            arpPhase -= step;
+        auto on = nextArpNote();
+        arpLastNote = on.note;
+        on.controls.sustain = false;
+        arpVoice = static_cast<int>(&startVoice(on) - voices.data());
+        arpRunning = true;
+    }
+    arpPhase += patch.arp.tempo;
+}
+
 const Synth::HeldNote* Synth::monoNote() const noexcept
 {
     for (std::size_t i = heldCount; i > 0; --i)
@@ -489,6 +588,7 @@ void Synth::event(const Event& e) noexcept
 {
     if (e.type == EventType::panic)
     {
+        resetArp();
         for (auto& v : voices) retire(v);
         effects.reset();
         heldCount = 0;
@@ -496,7 +596,14 @@ void Synth::event(const Event& e) noexcept
     }
     trackNotes(e);
     const bool pressed = e.type == EventType::noteOn && e.velocity > 0.0f;
-    if (patch.voicing.mode != PlayMode::poly)
+    if (patch.arp.enabled)
+    {
+        if (heldCount == 0)
+            resetArp();
+        if (e.type != EventType::expression && e.type != EventType::disconnect && e.type != EventType::allSoundOff)
+            return;
+    }
+    else if (patch.voicing.mode != PlayMode::poly)
     {
         auto& voice = voices.front();
         const bool sameChannel = voice.port == e.port && voice.channel == e.channel;
@@ -530,7 +637,11 @@ void Synth::event(const Event& e) noexcept
             continue;
         }
         if (e.type == EventType::expression)
+        {
             v.controls = e.controls;
+            if (patch.arp.enabled)
+                v.controls.sustain = false;
+        }
         if (e.type == EventType::allNotesOff ||
             ((e.type == EventType::noteOff || e.type == EventType::noteOn) && v.note == e.note))
             v.held = false;
@@ -623,6 +734,8 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
     {
         while (next < count && events[next].offset <= sample)
             event(events[next++]);
+        if (patch.arp.enabled && heldCount != 0)
+            tickArp();
 
         const bool update = controlStep == 0;
         controlStep = (controlStep + 1) % 8;

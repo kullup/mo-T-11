@@ -11,7 +11,7 @@ namespace mot
 namespace
 {
 constexpr std::array<const char*, oscillatorCount> oscillatorTags { "OSC_A", "OSC_B", "OSC_C" };
-constexpr int patchVersion = 7;
+constexpr int patchVersion = 8;
 constexpr int macroBranchVersion = 3;
 constexpr int thirdOscillatorVersion = 4;
 constexpr int legacyOscillatorCount = 2, legacyDestinationCount = 7;
@@ -165,6 +165,7 @@ std::string encodePatch(const NamedPatch& named)
     out << "TAPE_DELAY " << tape.enabled << ' ' << tape.time << ' ' << tape.feedback
         << ' ' << tape.wear << ' ' << tape.mix << '\n';
     out << "REVERB " << reverb.enabled << ' ' << reverb.decay << ' ' << reverb.damping << ' ' << reverb.mix << '\n';
+    out << "ARP " << p.arp.enabled << ' ' << p.arp.tempo << ' ' << static_cast<int>(p.arp.direction) << '\n';
     return out.str();
 }
 
@@ -297,6 +298,14 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
             || !readRange(tape.mix, 0, 1) || !readTag("REVERB") || !(in >> reverb.enabled)
             || !readRange(reverb.decay, 0, 1) || !readRange(reverb.damping, 0, 1) || !readRange(reverb.mix, 0, 1))
             return std::nullopt;
+    }
+    if (version >= 8)
+    {
+        int direction = 0;
+        if (!readTag("ARP") || !(in >> p.arp.enabled) || !readRange(p.arp.tempo, minArpTempo, maxArpTempo)
+            || !readRange(direction, 0, static_cast<int>(ArpDirection::upDown)))
+            return std::nullopt;
+        p.arp.direction = static_cast<ArpDirection>(direction);
     }
     in >> std::ws;
     return in.eof() ? std::optional { named } : std::nullopt;

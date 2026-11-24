@@ -420,13 +420,188 @@ void plateDecay()
     }
 }
 
+std::vector<float> renderScore(Synth& synth, int samples, const std::vector<Event>& score, int blockSize)
+{
+    std::vector<float> audio(samples);
+    std::size_t next = 0;
+    for (int offset = 0; offset < samples; offset += blockSize)
+    {
+        const int size = std::min(blockSize, samples - offset);
+        std::vector<Event> events;
+        while (next < score.size() && score[next].offset < offset + size)
+        {
+            events.push_back(score[next++]);
+            events.back().offset -= offset;
+        }
+        synth.render(audio.data() + offset, nullptr, size, events.data(), events.size());
+    }
+    return audio;
+}
+
+void arpeggiator(const WaveBank& bank)
+{
+    const auto noteAt = [](int note, int offset, EventType type = EventType::noteOn)
+    {
+        Event event { type, 0, 1, note };
+        event.offset = offset;
+        return event;
+    };
+    const auto patch = sinePatch();
+    constexpr int start = 73, step = 6000, gate = 4200;
+    const std::vector<Event> chord { noteAt(67, start), noteAt(60, start), noteAt(64, start) };
+    constexpr std::array patterns {
+        std::array { 60, 64, 67, 60, 64, 67 },
+        std::array { 67, 64, 60, 67, 64, 60 },
+        std::array { 60, 64, 67, 64, 60, 64 }
+    };
+    Synth synth(bank), reference(bank);
+    for (std::size_t direction = 0; direction < patterns.size(); ++direction)
+    {
+        std::vector<Event> score;
+        int time = start;
+        for (int note : patterns[direction])
+        {
+            score.push_back(noteAt(note, time));
+            score.push_back(noteAt(note, time + gate, EventType::noteOff));
+            time += step;
+        }
+        auto p = patch;
+        p.voicing.unison = 2;
+        reference.prepare(48000);
+        reference.setPatch(p);
+        const auto expected = renderScore(reference, time, score, time);
+        p.arp = { true, 120, static_cast<ArpDirection>(direction) };
+        for (auto mode : { PlayMode::poly, PlayMode::mono, PlayMode::legato })
+        {
+            p.voicing.mode = mode;
+            p.voicing.glide = 0.15f;
+            synth.prepare(48000);
+            synth.setPatch(p);
+            check(renderScore(synth, time, chord, 257) == expected,
+                  "Arp pitch order, retrigger, or sample timing differed from the score");
+        }
+    }
+
+    auto p = patch;
+    p.arp = { true, 137, ArpDirection::up };
+    synth.prepare(44100);
+    synth.setPatch(p);
+    reference.prepare(44100);
+    reference.setPatch(patch);
+    constexpr double fractionalStep = 15.0 * 44100 / 137;
+    std::vector<Event> fractionalScore;
+    for (int i = 0; i < 12; ++i)
+    {
+        const int note = i % 2 == 0 ? 60 : 67;
+        fractionalScore.push_back(noteAt(note, static_cast<int>(std::ceil(i * fractionalStep))));
+        fractionalScore.push_back(noteAt(note, static_cast<int>(std::ceil((i + 0.7) * fractionalStep)), EventType::noteOff));
+    }
+    const int duration = static_cast<int>(std::ceil(12 * fractionalStep));
+    check(renderScore(synth, duration, { noteAt(60, 0), noteAt(67, 0) }, 127)
+              == renderScore(reference, duration, fractionalScore, 2048),
+          "Fractional arp timing drifted at 44.1 kHz");
+
+    p.arp.tempo = 120;
+    synth.prepare(48000);
+    synth.setPatch(p);
+    reference.prepare(48000);
+    reference.setPatch(patch);
+    const Block first(synth, 3000, { noteAt(60, 0), noteAt(67, 0) });
+    check(first.left == Block(reference, 3000, { noteAt(60, 0) }).left, "Arp started with the wrong pitch");
+    p.arp.tempo = 240;
+    p.arp.direction = ArpDirection::down;
+    synth.setPatch(p);
+    reference.setPatch(patch);
+    const Block edited(synth, 3000);
+    check(edited.left == Block(reference, 3000, { noteAt(60, 600, EventType::noteOff), noteAt(67, 1500) }).left,
+          "Live tempo or direction edit restarted the clock or changed the active pitch");
+
+    p = patch;
+    p.matrix[pressure][pan] = 1.0f;
+    reference.prepare(48000);
+    reference.setPatch(p);
+    p.arp.enabled = true;
+    synth.prepare(48000);
+    synth.setPatch(p);
+    auto older = noteAt(60, 0);
+    older.velocity = 0.4f;
+    auto newer = older;
+    newer.port = 4;
+    newer.channel = 16;
+    newer.velocity = 0.9f;
+    auto expression = newer;
+    expression.type = EventType::expression;
+    expression.controls.pressure = 1.0f;
+    expression.offset = 256;
+    auto releaseNewer = newer;
+    releaseNewer.type = EventType::noteOff;
+    releaseNewer.offset = step + 200;
+    auto gateOff = [](Event event, int offset)
+    {
+        event.type = EventType::noteOff;
+        event.offset = offset;
+        return event;
+    };
+    auto alternate = noteAt(67, step);
+    auto fallback = older;
+    fallback.offset = 2 * step;
+    const std::vector<Event> duplicateScore { newer, expression, gateOff(newer, gate), alternate,
+                                              gateOff(alternate, step + gate), fallback };
+    check(renderScore(synth, 2 * step + 1500, { older, newer, noteAt(67, 0), expression, releaseNewer }, 511)
+              == renderScore(reference, 2 * step + 1500, duplicateScore, 512),
+          "Arp repeated a duplicate pitch or lost source velocity or expression");
+
+    p = patch;
+    p.arp.enabled = true;
+    synth.prepare(48000);
+    synth.setPatch(p);
+    Event pedal { EventType::expression, 2, 7 };
+    pedal.controls.sustain = true;
+    const Event on { EventType::noteOn, 2, 7 };
+    const Event off { EventType::noteOff, 2, 7 };
+    Block sustain(synth, step + 1000, { on, pedal, off });
+    check(synth.activeVoices() == 1 && peak(sustain.left) > 0.02f, "Sustain did not keep the arp running");
+    pedal.controls.sustain = false;
+    Block pedalUp(synth, step + 1000, { pedal });
+    check(synth.activeVoices() == 0, "Pedal-up left an arp voice active");
+    check(peak(Block(synth, step).left) == 0.0f, "Arp retriggered after pedal-up");
+
+    p.ampEnv.release = 0.2f;
+    synth.setPatch(p);
+    Block repeat(synth, step + 1000, { on });
+    check(synth.activeVoices() == 2, "A repeated arp pitch cut its previous release tail");
+    Block hardMute(synth, step + 1000, { { EventType::allSoundOff, 2, 7 } });
+    check(synth.activeVoices() == 0, "Channel sound-off left arp gates or tails active");
+    Block connected(synth, 1000, { on });
+    check(synth.activeVoices() == 1, "Arp did not restart immediately after sound-off");
+    Block disconnected(synth, step + 1000, { { EventType::disconnect, 2 } });
+    check(synth.activeVoices() == 0, "Disconnect left arp notes active");
+    Block allNotesOff(synth, 2 * step, { on, { EventType::allNotesOff, 2, 7 } });
+    check(peak(allNotesOff.left) == 0.0f, "All-notes-off left a pending arp trigger");
+    Block beforePanic(synth, 1000, { on });
+    Block panic(synth, 2 * step, { { EventType::panic } });
+    check(synth.activeVoices() == 0 && peak(Block(synth, step).left) == 0.0f,
+          "Panic left the arp clock or voices active");
+
+    Block held(synth, 1000, { on, noteAt(67, 0) });
+    p.arp.enabled = false;
+    synth.setPatch(p);
+    check(synth.activeVoices() == 2, "Disabling arp did not restore the held chord");
+    p.arp.enabled = true;
+    synth.setPatch(p);
+    check(peak(Block(synth, 1000).left) > 0.02f && synth.activeVoices() == 1,
+          "Enabling arp with a held chord did not start a single step");
+    synth.prepare(44100);
+    check(peak(Block(synth, step).left) == 0.0f, "Audio restart left the arp running");
+}
+
 void patches()
 {
     for (const auto& preset : factoryPresets())
     {
         const auto encoded = encodePatch(preset);
         const auto decoded = decodePatch(encoded);
-        check(decoded && encodePatch(*decoded) == encoded, "Preset failed round-trip");
+        check(decoded && !decoded->sound.arp.enabled && encodePatch(*decoded) == encoded, "Preset failed round-trip");
     }
     NamedPatch custom { "Custom \"01\"", factoryPresets()[2].sound };
     custom.sound.osc[2] = { pulseTable, 0.67f, 0.55f, -1, 3, 2.5f, -0.4f, 0.2f, false };
@@ -438,11 +613,22 @@ void patches()
     const auto decoded = decodePatch(encoded);
     check(decoded && encodePatch(*decoded) == encoded, "Custom patch failed round-trip");
     check(!decodePatch(encoded.substr(0, encoded.size() / 2)), "Truncated patch was accepted");
-    check(!decodePatch("MOT11 8" + encoded.substr(7)), "Unknown patch version was accepted");
+    check(!decodePatch("MOT11 9" + encoded.substr(7)), "Unknown patch version was accepted");
     check(!decodePatch(encoded + "junk"), "Unexpected trailing content was accepted");
     const auto voicing = encoded.find("VOICING ");
     const auto routes = encoded.find("ROUTES ", voicing);
     const auto tape = encoded.find("TAPE_DELAY ", routes);
+    const auto arp = encoded.find("ARP ", tape);
+    const auto legacy7 = decodePatch("MOT11 7" + encoded.substr(7, arp - 7));
+    check(legacy7 && encodePatch(*legacy7) == encoded, "Version 7 patch did not load with arp defaults");
+    auto withArp = custom;
+    withArp.sound.arp = { true, 163, ArpDirection::upDown };
+    const auto encodedArp = encodePatch(withArp);
+    const auto decodedArp = decodePatch(encodedArp);
+    check(decodedArp && encodePatch(*decodedArp) == encodedArp, "Arp settings failed round-trip");
+    check(!decodePatch(encoded.substr(0, arp)), "Missing arp settings were accepted in a version 8 patch");
+    for (const auto* invalid : { "ARP 2 120 0\n", "ARP 1 39 0\n", "ARP 1 241 0\n", "ARP 1 120 3\n" })
+        check(!decodePatch(encoded.substr(0, arp) + invalid), "Invalid arp settings were accepted");
     const auto third = encoded.find("OSC_C "), filter = encoded.find("FILTER ");
     const auto oldMatrix = [&](const auto& targets)
     {
@@ -476,9 +662,9 @@ void patches()
     for (auto& row : reassigned.sound.matrix)
         std::swap(row[pan], row[ampGain]);
     const auto legacy6 = decodePatch("MOT11 6" + legacyHeader + "TARGETS 0 1 7 2 3 8 4 5 16\n"
-                                    + assignableMatrix + withEffects.substr(tape));
+                                    + assignableMatrix + withEffects.substr(tape, withEffects.find("ARP ", tape) - tape));
     check(legacy6 && encodePatch(*legacy6) == encodePatch(reassigned), "Reassigned version 6 routes failed to migrate");
-    check(!decodePatch(withEffects.substr(0, tape) + "TAPE_DELAY 1 0.32 1 0.8 0.1\nREVERB 1 1 0.9 1\n"),
+    check(!decodePatch(withEffects.substr(0, tape) + "TAPE_DELAY 1 0.32 1 0.8 0.1\nREVERB 1 1 0.9 1\nARP 0 120 0\n"),
           "Out-of-range tape feedback was accepted");
     custom.sound.tapeDelay = {};
     custom.sound.reverb = {};
@@ -535,6 +721,7 @@ int main()
         glideAndUnison(bank);
         effects(bank);
         plateDecay();
+        arpeggiator(bank);
         patches();
         std::cout << "MO-T 11 headless checks passed\n";
     }

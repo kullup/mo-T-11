@@ -791,6 +791,7 @@ public:
         createMatrix();
         createVoicing();
         createEffects();
+        createArpeggiator();
         createKeyboard();
         applyTheme(audio.panelTheme());
         setPerformanceVisible(false);
@@ -882,6 +883,7 @@ public:
         label(g, "AMOUNT", amountCaption, 12.0f, c.legend.ink, juce::Justification::centred, true);
         paintSectionHeading(g, voicingPanel, "VOICING");
         paintEffects(g);
+        paintSectionHeading(g, arpPanel, "ARPEGGIATOR");
         if (keys.isVisible()) paintPerformance(g);
         for (const auto& entry : sliders)
         {
@@ -922,9 +924,10 @@ private:
     inline static const Rectangle<int> lfoPanel { 875, 111, 169, 425 };
     inline static const Rectangle<int> matrixPanel { 1054, 111, panelRight - 1054, 425 };
     static constexpr int lowerPanelY = 550, voicingWidth = 403, effectsX = panelInset + voicingWidth + 10;
-    static constexpr int tapeX = effectsX + 13, reverbDivider = 929, reverbX = reverbDivider + 21;
+    static constexpr int arpX = 1184, tapeX = effectsX + 13, reverbDivider = 815, reverbX = reverbDivider + 16;
     inline static const Rectangle<int> voicingPanel { panelInset, lowerPanelY, voicingWidth, 104 };
-    inline static const Rectangle<int> effectsPanel { effectsX, lowerPanelY, panelRight - effectsX, 104 };
+    inline static const Rectangle<int> effectsPanel { effectsX, lowerPanelY, arpX - effectsX - 10, 104 };
+    inline static const Rectangle<int> arpPanel { arpX, lowerPanelY, panelRight - arpX, 104 };
     inline static const Rectangle<int> patchDisplay { 492, 35, 278, 48 };
     inline static const std::array<const char*, oscillatorCount> oscillatorNames { "A", "B", "C" };
     enum OscillatorColumn { positionColumn, tuneColumn, fineColumn, volumeColumn };
@@ -937,6 +940,7 @@ private:
     inline static const Rectangle<int> panicBounds { panelRight - 111, 44, 86, 30 };
     inline static const Rectangle<int> headerNotice { 839, 78, panicBounds.getRight() - 839, 15 };
     inline static const std::array<const char*, 3> modeNames { "POLY", "MONO", "LEGATO" };
+    inline static const std::array<const char*, 3> arpDirections { "UP", "DOWN", "UP/DOWN" };
 
     static int oscillatorColumnX(int column) { return 218 + column * 72; }
     static Rectangle<int> oscillatorDisplay(int row) { return { 36, 169 + row * 100, 146, 92 }; }
@@ -1072,6 +1076,11 @@ private:
         tapeSwitch->setToggleState(p.tapeDelay.enabled, juce::dontSendNotification);
         reverbSwitch->setButtonText(p.reverb.enabled ? "ON" : "BYPASS");
         reverbSwitch->setToggleState(p.reverb.enabled, juce::dontSendNotification);
+        arpSwitch->setButtonText(p.arp.enabled ? "ON" : "OFF");
+        arpSwitch->setToggleState(p.arp.enabled, juce::dontSendNotification);
+        const auto direction = arpDirections[static_cast<std::size_t>(p.arp.direction)];
+        arpDirectionButton->setButtonText(direction);
+        arpDirectionButton->setTitle(String("Arpeggiator direction: ") + direction);
         static constexpr const char* modes[] { "LP  /  LOW PASS", "BP  /  BAND PASS", "HP  /  HIGH PASS" };
         filterMode->setButtonText(modes[static_cast<int>(p.filterMode)]);
         static constexpr const char* shapes[] { "SINE", "TRI", "RAMP", "SQR" };
@@ -1419,25 +1428,45 @@ private:
 
     void createEffects()
     {
-        tapeSwitch = &button({}, "Toggle tape delay", { tapeX, lowerPanelY + 59, 92, 27 }, [this]
+        tapeSwitch = &button({}, "Toggle tape delay", { tapeX, lowerPanelY + 59, 78, 27 }, [this]
         {
             edit([](Patch& p) { p.tapeDelay.enabled = !p.tapeDelay.enabled; });
         });
         effectKnob(&Patch::tapeDelay, &TapeDelaySettings::time, "Tape delay time", "TIME",
-                   574, minTapeTime, maxTapeTime, 0.001, seconds, 0.32);
+                   542, minTapeTime, maxTapeTime, 0.001, seconds, 0.32);
         effectKnob(&Patch::tapeDelay, &TapeDelaySettings::feedback, "Tape delay feedback", "FEEDBACK",
-                   655, 0, maxTapeFeedback);
-        effectKnob(&Patch::tapeDelay, &TapeDelaySettings::wear, "Tape wear, pitch drift and tone", "WEAR", 736);
-        tapeMixKnob = &effectKnob(&Patch::tapeDelay, &TapeDelaySettings::mix, "Tape delay wet mix", "MIX", 817);
+                   608, 0, maxTapeFeedback);
+        effectKnob(&Patch::tapeDelay, &TapeDelaySettings::wear, "Tape wear, pitch drift and tone", "WEAR", 674);
+        tapeMixKnob = &effectKnob(&Patch::tapeDelay, &TapeDelaySettings::mix, "Tape delay wet mix", "MIX", 740);
 
-        reverbSwitch = &button({}, "Toggle plate reverb", { reverbX, lowerPanelY + 59, 92, 27 }, [this]
+        reverbSwitch = &button({}, "Toggle plate reverb", { reverbX, lowerPanelY + 59, 78, 27 }, [this]
         {
             edit([](Patch& p) { p.reverb.enabled = !p.reverb.enabled; });
         });
-        effectKnob(&Patch::reverb, &ReverbSettings::decay, "Plate reverb decay time", "DECAY", 1064,
+        effectKnob(&Patch::reverb, &ReverbSettings::decay, "Plate reverb decay time", "DECAY", 924,
                    0, 1, 0.01, [](double v) { return seconds(plateDecaySeconds(static_cast<float>(v))); });
-        effectKnob(&Patch::reverb, &ReverbSettings::damping, "Plate reverb high-frequency damping", "DAMP", 1168);
-        reverbMixKnob = &effectKnob(&Patch::reverb, &ReverbSettings::mix, "Plate reverb wet mix", "MIX", 1272);
+        effectKnob(&Patch::reverb, &ReverbSettings::damping, "Plate reverb high-frequency damping", "DAMP", 1005);
+        reverbMixKnob = &effectKnob(&Patch::reverb, &ReverbSettings::mix, "Plate reverb wet mix", "MIX", 1086);
+    }
+
+    void createArpeggiator()
+    {
+        arpSwitch = &button({}, "Toggle arpeggiator", { arpX + 13, lowerPanelY + 35, 84, 24 }, [this]
+        {
+            edit([](Patch& p) { p.arp.enabled = !p.arp.enabled; });
+        });
+        arpDirectionButton = &button({}, "Cycle arpeggiator direction", { arpX + 13, lowerPanelY + 64, 84, 24 }, [this]
+        {
+            edit([](Patch& p)
+            {
+                const auto next = (static_cast<std::size_t>(p.arp.direction) + 1) % arpDirections.size();
+                p.arp.direction = static_cast<ArpDirection>(next);
+            });
+        });
+        slider("Arpeggiator tempo", "TEMPO", lowerKnob(arpX + 120), false, minArpTempo, maxArpTempo, 1,
+               [](const Patch& p) { return p.arp.tempo; },
+               [](Patch& p, double value) { p.arp.tempo = static_cast<int>(value); },
+               [](double value) { return String(static_cast<int>(value)) + " BPM"; });
     }
 
     void createKeyboard()
@@ -1625,6 +1654,8 @@ private:
         g.drawHorizontalLine((oscPanel.getBottom() + lowerPanelY) / 2, panelInset, panelRight);
         g.drawVerticalLine((voicingPanel.getRight() + effectsPanel.getX()) / 2, lowerPanelY + 8.0f,
                            static_cast<float>(voicingPanel.getBottom() - 8));
+        g.drawVerticalLine((effectsPanel.getRight() + arpPanel.getX()) / 2, lowerPanelY + 8.0f,
+                           static_cast<float>(arpPanel.getBottom() - 8));
         if (keys.isVisible())
             g.drawHorizontalLine(660, panelInset, panelRight);
     }
@@ -1866,6 +1897,8 @@ private:
     juce::TextButton* matrixClear = nullptr;
     juce::TextButton* tapeSwitch = nullptr;
     juce::TextButton* reverbSwitch = nullptr;
+    juce::TextButton* arpSwitch = nullptr;
+    juce::TextButton* arpDirectionButton = nullptr;
     juce::Slider* masterVolume = nullptr;
     juce::Slider* matrixAmountKnob = nullptr;
     juce::Slider* tapeMixKnob = nullptr;

@@ -100,12 +100,16 @@ private:
     struct Route { int source; Destination target; float amount; };
     void event(const Event&) noexcept;
     void trackNotes(const Event&) noexcept;
+    void tickArp() noexcept;
+    const Event& nextArpNote() noexcept;
+    void endArpGate() noexcept;
+    void resetArp() noexcept;
     const HeldNote* monoNote() const noexcept;
     void updateMono(bool retrigger) noexcept;
     void changeVoiceMode(PlayMode previous) noexcept;
     void setVoiceNote(Voice&, const Event&, double glideFrom) noexcept;
     void trigger(Voice&, const Event&, double glideFrom = 0.0) noexcept;
-    void startVoice(const Event&, bool held = true) noexcept;
+    Voice& startVoice(const Event&, bool held = true) noexcept;
     void updateVoice(Voice&) noexcept;
     void advance(float& phase, float increment) const noexcept;
     void retire(Voice&) noexcept;
@@ -116,6 +120,9 @@ private:
     std::array<Voice, polyphony> voices {};
     std::array<HeldNote, 256> heldNotes {};
     std::size_t heldCount = 0;
+    double arpPhase = 0.0;
+    int arpLastNote = -1, arpVoice = polyphony;
+    bool arpRunning = false, arpAscending = true;
     std::array<Route, sourceCount * destinationCount> routes {};
     std::size_t routeCount = 0;
     std::array<float, maxUnison> unisonPan {}, unisonRatio { 1.0f };
