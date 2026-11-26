@@ -87,6 +87,7 @@ constexpr ThemeOption themeOptions[] {
 constexpr float displayTextScale = 1.3f;
 constexpr int woodCheekWidth = 32;
 constexpr int headerInset = 19;
+constexpr int headerBottom = 104;
 constexpr int classicSideTrim = 20;
 
 juce::Font panelFont(float size, bool bold = false)
@@ -970,16 +971,78 @@ private:
     int octave = 4, mouseNote = -1;
     std::array<bool, mapping.size()> computer {};
 };
+
+class WindowButton final : public juce::TextButton
+{
+public:
+    WindowButton(WindowControlKind control, const String& name)
+        : TextButton(name), kind(control)
+    {
+        setTitle(name);
+        setTooltip(name);
+    }
+
+    void setMaximised(bool isMaximised)
+    {
+        if (maximised == isMaximised) return;
+        maximised = isMaximised;
+        const auto* name = maximised ? "Restore window" : "Maximize window";
+        setButtonText(name);
+        setTitle(name);
+        setTooltip(name);
+    }
+
+private:
+    void paintButton(Graphics& g, bool highlighted, bool down) override
+    {
+        getLookAndFeel().drawButtonBackground(g, *this, findColour(buttonColourId), highlighted, down);
+        g.setColour(findColour(textColourOffId));
+        const auto centre = getLocalBounds().toFloat().getCentre().translated(0.0f, down ? 1.0f : -1.0f);
+        const auto icon = Rectangle<float>(11.0f, 11.0f).withCentre(centre);
+        switch (kind)
+        {
+            case WindowControlKind::minimise:
+                g.fillRect(icon.withY(centre.y + 2.0f).withHeight(1.5f));
+                break;
+            case WindowControlKind::maximise:
+                if (maximised)
+                {
+                    const auto rear = icon.withTrimmedBottom(3.0f).withTrimmedLeft(3.0f);
+                    juce::Path outline;
+                    outline.startNewSubPath(rear.getTopLeft());
+                    outline.lineTo(rear.getTopRight());
+                    outline.lineTo(rear.getBottomRight());
+                    g.strokePath(outline, juce::PathStrokeType(1.3f));
+                    g.drawRect(icon.withTrimmedTop(3.0f).withTrimmedRight(3.0f), 1.3f);
+                }
+                else
+                    g.drawRect(icon, 1.4f);
+                break;
+            case WindowControlKind::close:
+                g.drawLine({ icon.getTopLeft(), icon.getBottomRight() }, 1.5f);
+                g.drawLine({ icon.getBottomLeft(), icon.getTopRight() }, 1.5f);
+                break;
+            default: break;
+        }
+    }
+
+    const WindowControlKind kind;
+    bool maximised = false;
+};
 }
 
 class Panel::Surface final : public juce::Component, private juce::Timer
 {
 public:
-    Surface(Standalone& instrument, std::function<void()> onDesignSizeChanged)
-        : audio(instrument), designSizeChanged(std::move(onDesignSizeChanged)), keys(audio, skin)
+    Surface(Standalone& instrument, std::function<void()> onDesignSizeChanged,
+            const std::function<void(WindowControlKind)>& onWindowControl)
+        : audio(instrument), designSizeChanged(std::move(onDesignSizeChanged)),
+          integratedCaption(static_cast<bool>(onWindowControl)), keys(audio, skin)
     {
         setLookAndFeel(&skin);
         createHeader();
+        if (integratedCaption)
+            createWindowControls(onWindowControl);
         createOscillators();
         createFilter();
         createEnvelopes();
@@ -1014,6 +1077,24 @@ public:
     bool hasWoodCheeks() const { return skin.hasWoodCheeks(); }
     bool hasTopRail() const { return skin.isMidnight(); }
 
+    WindowControlKind windowControlAt(juce::Point<float> point) const
+    {
+        if (!integratedCaption || !headerBounds.toFloat().contains(point) || meterBounds.toFloat().contains(point))
+            return WindowControlKind::client;
+
+        for (const auto& [control, style, kind] : buttons)
+            if (control->isVisible() && control->getBounds().toFloat().contains(point))
+                return kind;
+
+        return WindowControlKind::caption;
+    }
+
+    void setWindowMaximised(bool maximised)
+    {
+        if (maximiseControl != nullptr)
+            maximiseControl->setMaximised(maximised);
+    }
+
     Rectangle<int> faceplateBounds() const
     {
         const auto bounds = getLocalBounds();
@@ -1044,7 +1125,6 @@ public:
         g.fillRect(face);
 
         const float headerTop = hasTopRail() ? static_cast<float>(headerInset) : face.getY();
-        constexpr float headerBottom = 104.0f;
         g.setColour(c.header.shell);
         g.fillRect(face.withY(headerTop).withHeight(headerBottom - headerTop));
         g.setColour(c.header.edge);
@@ -1118,9 +1198,12 @@ private:
     {
         std::unique_ptr<juce::TextButton> control;
         ButtonStyle style;
+        WindowControlKind windowControl = WindowControlKind::client;
     };
 
     static constexpr int panelInset = 22, panelRight = designWidth - panelInset;
+    inline static const Rectangle<int> headerBounds { panelInset, headerInset, panelRight - panelInset,
+                                                       headerBottom - headerInset };
     inline static const Rectangle<int> oscPanel { panelInset, 111, 475, 425 };
     inline static const Rectangle<int> filterPanel { 507, 111, 138, 425 };
     inline static const Rectangle<int> envPanel { 655, 111, 210, 425 };
@@ -1140,8 +1223,6 @@ private:
     inline static const Rectangle<int> matrixAmountBounds = Rectangle<int>(lfoKnobSize, lfoKnobSize).withCentre({
         (matrixScreenBounds.getRight() + matrixPanel.getRight()) / 2, matrixScreenBounds.getY() + lfoKnobSize / 2 });
     inline static const Rectangle<int> performanceStatus { 117, 683, 267, 84 };
-    inline static const Rectangle<int> panicBounds { panelRight - 111, 44, 86, 30 };
-    inline static const Rectangle<int> headerNotice { 839, 78, panicBounds.getRight() - 839, 15 };
     inline static const std::array<const char*, 3> modeNames { "POLY", "MONO", "LEGATO" };
     inline static const std::array<const char*, 3> arpDirections { "UP", "DOWN", "UP/DOWN" };
 
@@ -1171,7 +1252,7 @@ private:
     {
         skin.setTheme(theme);
         const auto& c = skin.palette();
-        for (const auto& [control, style] : buttons)
+        for (const auto& [control, style, kind] : buttons)
         {
             const auto face = style == ButtonStyle::display ? juce::Colours::transparentBlack
                             : style == ButtonStyle::panic ? c.button.panic
@@ -1317,7 +1398,9 @@ private:
         presetMenu = &button({}, "Factory presets", patchDisplay, [this] { showPresets(); }, ButtonStyle::display);
         button("OPEN", "Open patch file", { 839, 44, 65, 30 }, [this] { chooseFile(false); }, ButtonStyle::header);
         button("SAVE", "Save patch file", { 912, 44, 65, 30 }, [this] { chooseFile(true); }, ButtonStyle::header);
-        audioButton = &button("AUDIO", "Select audio output", { 1004, 44, 75, 30 },
+        const auto audioBounds = integratedCaption ? Rectangle<int>(984, 44, 70, 30)
+                                                   : Rectangle<int>(1004, 44, 75, 30);
+        audioButton = &button("AUDIO", "Select audio output", audioBounds,
                               [this] { showOutputs(); }, ButtonStyle::header);
         button("PANIC", "Stop all notes", panicBounds, [this]
         {
@@ -1325,6 +1408,24 @@ private:
             audio.panic();
             notice("All notes cleared");
         }, ButtonStyle::panic);
+    }
+
+    void createWindowControls(const std::function<void(WindowControlKind)>& action)
+    {
+        int x = 1270;
+        for (const auto& [kind, name] : { std::pair { WindowControlKind::minimise, "Minimize window" },
+                                         std::pair { WindowControlKind::maximise, "Maximize window" },
+                                         std::pair { WindowControlKind::close, "Close window" } })
+        {
+            auto control = std::make_unique<WindowButton>(kind, name);
+            control->onClick = [action, kind] { action(kind); };
+            control->setBounds(x, 44, 34, 30);
+            addAndMakeVisible(*control);
+            if (kind == WindowControlKind::maximise)
+                maximiseControl = control.get();
+            buttons.push_back({ std::move(control), ButtonStyle::header, kind });
+            x += 36;
+        }
     }
 
     void showThemes()
@@ -1844,7 +1945,7 @@ private:
 
     void timerCallback() override
     {
-        repaint(1100, 35, 158, 55);
+        repaint(meterBounds);
         repaint(keys.isVisible() ? performanceStatus : headerNotice);
     }
 
@@ -1960,21 +2061,26 @@ private:
 
         if (meterDisplay)
         {
-            display(g, { 1092, 35, 164, 48 }, c);
-            pixels(g, "OUT", 1102, 44, 1, phosphor.withAlpha(0.75f));
+            display(g, meterBounds, c);
+            pixels(g, "OUT", meterBounds.getX() + 10.0f, 44, 1, phosphor.withAlpha(0.75f));
         }
         else
-            label(g, "OUT", { 1101, 39, 54, 19 }, 12.0f, c.header.ink, juce::Justification::centredLeft, true);
+            label(g, "OUT", { meterBounds.getX() + 9, 39, 54, 19 }, 12.0f, c.header.ink,
+                  juce::Justification::centredLeft, true);
         const auto amount = audio.outputPeak();
         const float db = 20.0f * std::log10(std::max(0.0001f, amount));
-        for (int i = 0; i < 13; ++i)
+        constexpr int segments = 13;
+        const float step = integratedCaption ? (meterBounds.getWidth() - 20.0f) / segments
+                                              : (meterDisplay ? 11.0f : 12.0f);
+        const float ledWidth = step - (meterDisplay ? 2.5f : 3.0f);
+        for (int i = 0; i < segments; ++i)
         {
             const bool lit = db > -54.0f + 4.5f * i;
             const auto colour = skin.isMidnight() ? phosphor.withAlpha(lit ? (i >= 11 ? 1.0f : 0.8f) : 0.15f)
                                                   : lit ? (i >= 11 ? c.header.clip : c.header.meter) : c.header.unlit;
             g.setColour(colour);
-            const int x = 1102 + (meterDisplay ? 11 : 12) * i;
-            const Rectangle<float> led { static_cast<float>(x), 61.0f, meterDisplay ? 8.5f : 9.0f, 9.0f };
+            const float x = meterBounds.getX() + 10.0f + step * i;
+            const Rectangle<float> led { x, 61.0f, ledWidth, 9.0f };
             g.fillRoundedRectangle(led, meterDisplay ? 0.75f : 1.5f);
         }
     }
@@ -2113,6 +2219,12 @@ private:
 
     Standalone& audio;
     const std::function<void()> designSizeChanged;
+    const bool integratedCaption;
+    const Rectangle<int> meterBounds { integratedCaption ? Rectangle<int>(1062, 35, 126, 48)
+                                                         : Rectangle<int>(1092, 35, 164, 48) };
+    const Rectangle<int> panicBounds { integratedCaption ? Rectangle<int>(1196, 44, 64, 30)
+                                                         : Rectangle<int>(panelRight - 111, 44, 86, 30) };
+    const Rectangle<int> headerNotice { 839, 78, panicBounds.getRight() - 839, 15 };
     Skin skin;
     PerformanceKeys keys;
     juce::TooltipWindow tooltips { this, 450 };
@@ -2135,6 +2247,7 @@ private:
     juce::TextButton* themeButton = nullptr;
     juce::TextButton* audioButton = nullptr;
     juce::TextButton* performanceButton = nullptr;
+    WindowButton* maximiseControl = nullptr;
     juce::TextButton* octaveDown = nullptr;
     juce::TextButton* octaveUp = nullptr;
     juce::TextButton* matrixAdd = nullptr;
@@ -2154,13 +2267,14 @@ private:
     double messageEnd = 0.0;
 };
 
-Panel::Panel(Standalone& audio, std::function<void()> onDesignSizeChanged)
+Panel::Panel(Standalone& audio, std::function<void()> onDesignSizeChanged,
+             std::function<void(WindowControlKind)> onWindowControl)
     : surface(std::make_unique<Surface>(audio, [this, onDesignSizeChanged = std::move(onDesignSizeChanged)]
       {
           onDesignSizeChanged();
           resized();
           repaint();
-      }))
+      }, onWindowControl))
 {
     setOpaque(true);
     addAndMakeVisible(*surface);
@@ -2179,6 +2293,12 @@ juce::Point<int> Panel::designSize() const
 bool Panel::playComputerKey(const juce::KeyPress& press) { return surface->playComputerKey(press); }
 bool Panel::releaseComputerKeys() { return surface->releaseComputerKeys(); }
 void Panel::releasePerformanceKeys() { surface->releasePerformanceKeys(); }
+Panel::WindowControlKind Panel::windowControlAt(juce::Point<float> point) const
+{
+    return surface->windowControlAt(surface->getLocalPoint(this, point));
+}
+
+void Panel::setWindowMaximised(bool maximised) { surface->setWindowMaximised(maximised); }
 
 void Panel::paint(Graphics& g)
 {
