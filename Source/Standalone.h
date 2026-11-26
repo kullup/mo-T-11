@@ -11,7 +11,7 @@
 
 namespace mot
 {
-enum class PanelTheme { classic, classicDark, midnight };
+enum class PanelTheme { classic, classicDark, midnight, studioGray };
 
 class Standalone final : public juce::AudioIODeviceCallback, private juce::Timer,
                          private juce::ChangeListener

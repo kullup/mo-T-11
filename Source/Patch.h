@@ -9,13 +9,14 @@ namespace mot
 {
 constexpr int oscillatorCount = 3;
 constexpr int sourceCount = 8;
-constexpr int presetCount = 9;
+constexpr int presetCount = 10;
 constexpr int maxUnison = 4;
 constexpr int maxOscillatorSemitones = 24;
 constexpr float maxGlide = 2.0f, maxUnisonDetune = 50.0f;
 constexpr float minTapeTime = 0.05f, maxTapeTime = 1.2f, maxTapeFeedback = 0.9f;
 constexpr float minPlateDecay = 0.25f, maxPlateDecay = 20.0f;
 constexpr int minArpTempo = 40, maxArpTempo = 240;
+constexpr float minStringDecay = 0.15f, maxStringDecay = 4.0f;
 
 float plateDecaySeconds(float normalized) noexcept;
 
@@ -35,6 +36,7 @@ enum class FilterMode { lowPass, bandPass, highPass };
 enum class Shape { sine, triangle, ramp, square };
 enum class PlayMode { poly, mono, legato };
 enum class ArpDirection { up, down, upDown };
+enum class OscillatorMode { waveform, pluckedString };
 
 inline constexpr std::array<const char*, tableCount> tableNames {
     "Basic Shapes", "Pulse Width", "Hollow Body", "Harmonic Ladder", "Folded Sine", "Glass Formants",
@@ -61,6 +63,8 @@ struct Oscillator
     int octave = 0, semitone = 0;
     float fine = 0.0f, pan = 0.0f, phase = 0.0f;
     bool resetPhase = true;
+    OscillatorMode mode = OscillatorMode::waveform;
+    float brightness = 0.55f, stringDecay = 0.85f;
 };
 
 struct Envelope { float attack, decay, sustain, release; };

@@ -73,7 +73,15 @@ private:
         struct Layer
         {
             float phase = 0, ratio = 1, targetRatio = 1;
+            float stringPhase = 0;
             float gainL = 0, gainR = 0, targetGainL = 0, targetGainR = 0;
+        };
+
+        struct StringState
+        {
+            bool selected = false;
+            float mix = 0, energy = 0, overtoneEnergy = 0;
+            float brightness = 0, targetBrightness = 0;
         };
 
         std::uint32_t port = 0;
@@ -87,6 +95,7 @@ private:
         Env amp, filter;
         std::array<Filter, 2> filters {};
         std::array<std::array<Layer, maxUnison>, oscillatorCount> layers {};
+        std::array<StringState, oscillatorCount> strings {};
         std::array<float, 2> lfoPhases {};
         std::array<float, oscillatorCount> tuning {}, position {}, targetTuning {}, targetPosition {};
         std::array<int, oscillatorCount> table {}, previousTable {};
@@ -109,7 +118,9 @@ private:
     void changeVoiceMode(PlayMode previous) noexcept;
     void setVoiceNote(Voice&, const Event&, double glideFrom) noexcept;
     void trigger(Voice&, const Event&, double glideFrom = 0.0) noexcept;
+    void pluck(Voice&, int oscillator) noexcept;
     Voice& startVoice(const Event&, bool held = true) noexcept;
+    void updateStringDecay() noexcept;
     void updateVoice(Voice&) noexcept;
     void advance(float& phase, float increment) const noexcept;
     void retire(Voice&) noexcept;
@@ -126,6 +137,7 @@ private:
     std::array<Route, sourceCount * destinationCount> routes {};
     std::size_t routeCount = 0;
     std::array<float, maxUnison> unisonPan {}, unisonRatio { 1.0f };
+    std::array<float, oscillatorCount> stringLoss {}, stringOvertoneLoss {};
     std::array<float, 2> globalPhases {};
     std::uint64_t age = 0;
     float rate = 48000.0f, seconds = 1.0f / 48000.0f;

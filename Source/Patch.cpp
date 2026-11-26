@@ -11,7 +11,8 @@ namespace mot
 namespace
 {
 constexpr std::array<const char*, oscillatorCount> oscillatorTags { "OSC_A", "OSC_B", "OSC_C" };
-constexpr int patchVersion = 8;
+constexpr int patchVersion = 9;
+constexpr int oscillatorModeVersion = 9;
 constexpr int macroBranchVersion = 3;
 constexpr int thirdOscillatorVersion = 4;
 constexpr int legacyOscillatorCount = 2, legacyDestinationCount = 7;
@@ -114,6 +115,18 @@ const std::array<NamedPatch, presetCount>& factoryPresets()
         analog.filterEnv = { 0.006f, 0.36f, 0.13f, 0.25f };
         analog.matrix[filterEnvelope][cutoff] = 0.58f;
         bank[8] = { "Analog Stack", analog };
+
+        Patch wire;
+        wire.osc[0] = { basicShapes, 0.27f, 0.83f, 0, 0, 0.0f, -0.14f };
+        wire.osc[0].mode = OscillatorMode::pluckedString;
+        wire.osc[0].brightness = 0.82f;
+        wire.osc[0].stringDecay = 0.65f;
+        wire.osc[1] = { glassFormants, 0.43f, 0.33f, 0, 0, 0.0f, 0.22f, 0.0f, false };
+        wire.cutoff = 6400.0f;
+        wire.ampEnv = { 0.004f, 0.23f, 0.82f, 0.46f };
+        wire.lfos[0].rate = 0.32f;
+        wire.matrix[lfo1][positionB] = 0.28f;
+        bank[9] = { "Wire Bloom", wire };
         return bank;
     }();
     return presets;
@@ -166,6 +179,10 @@ std::string encodePatch(const NamedPatch& named)
         << ' ' << tape.wear << ' ' << tape.mix << '\n';
     out << "REVERB " << reverb.enabled << ' ' << reverb.decay << ' ' << reverb.damping << ' ' << reverb.mix << '\n';
     out << "ARP " << p.arp.enabled << ' ' << p.arp.tempo << ' ' << static_cast<int>(p.arp.direction) << '\n';
+    out << "OSC_MODES";
+    for (const auto& o : p.osc)
+        out << ' ' << static_cast<int>(o.mode) << ' ' << o.brightness << ' ' << o.stringDecay;
+    out << '\n';
     return out.str();
 }
 
@@ -306,6 +323,20 @@ std::optional<NamedPatch> decodePatch(std::string_view data)
             || !readRange(direction, 0, static_cast<int>(ArpDirection::upDown)))
             return std::nullopt;
         p.arp.direction = static_cast<ArpDirection>(direction);
+    }
+    if (version >= oscillatorModeVersion)
+    {
+        if (!readTag("OSC_MODES"))
+            return std::nullopt;
+        for (auto& o : p.osc)
+        {
+            int oscillatorMode = 0;
+            if (!readRange(oscillatorMode, 0, static_cast<int>(OscillatorMode::pluckedString))
+                || !readRange(o.brightness, 0.0f, 1.0f)
+                || !readRange(o.stringDecay, minStringDecay, maxStringDecay))
+                return std::nullopt;
+            o.mode = static_cast<OscillatorMode>(oscillatorMode);
+        }
     }
     in >> std::ws;
     return in.eof() ? std::optional { named } : std::nullopt;

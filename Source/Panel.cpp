@@ -64,11 +64,28 @@ const PanelPalette midnightPalette {
     { Colour(0xffeee4cf), Colour(0xffa59b88), Colour(0xff23221f), Colour(0xff0c0b0a), Colour(0xff4c4235), Colour(0xff392317) }
 };
 
+const Colour studioInk(0xff252120);
+const Colour studioCap(0xffdedede);
+const Colour studioOrange(0xffe89062);
+
+const PanelPalette studioGrayPalette {
+    { Colour(0xff918b89), Colour(0xffc3bebc), Colour(0xff8c8684), Colour(0xffa8a2a0), Colour(0xffbcb6b4) },
+    { studioInk, Colour(0xff48413f), studioInk, Colour(0xff6e2f1e) },
+    { Colour(0xff2b2624), Colour(0xff514641), Colour(0xff1d1816), Colour(0x0bffb587), Colour(0xffffb489) },
+    { studioCap, Colour(0xff746d6a), Colour(0xffb8b6b5), Colour(0xffc5c4c3), Colour(0xff121010),
+      studioCap, studioCap, Colour(0xff121010), Colour(0xff211d1b), studioOrange },
+    { studioCap, studioCap, studioOrange, Colour(0xffd9b7a7), studioInk },
+    { Colour(0xffb3adab), Colour(0xff8c8684), studioInk, Colour(0xff48413f),
+      studioOrange, Colour(0xff76351f), Colour(0xff958d89) },
+    { studioCap, Colour(0xffa6a3a1), Colour(0xff352f2d), Colour(0xff201b19), Colour(0xff48413f), studioInk }
+};
+
 struct ThemeOption { PanelTheme theme; const char* label; };
 constexpr ThemeOption themeOptions[] {
     { PanelTheme::classic, "Classic" },
     { PanelTheme::classicDark, "Classic Dark" },
-    { PanelTheme::midnight, "Midnight" }
+    { PanelTheme::midnight, "Midnight" },
+    { PanelTheme::studioGray, "Studio Gray" }
 };
 
 constexpr float displayTextScale = 1.3f;
@@ -149,6 +166,103 @@ void drawControlShadow(Graphics& g, Rectangle<float> bounds, float cornerRadius,
     juce::Path silhouette;
     silhouette.addRoundedRectangle(bounds, cornerRadius);
     juce::DropShadow(colour, 2, { 1, 2 }).drawForPath(g, silhouette);
+}
+
+void drawStudioCap(Graphics& g, Rectangle<float> bounds, float radius, Colour face)
+{
+    g.setGradientFill(panelLightGradient(bounds, face.brighter(0.12f), face.darker(0.08f)));
+    g.fillRoundedRectangle(bounds, radius);
+
+    const auto inset = bounds.reduced(0.9f, 1.0f).withTrimmedBottom(0.6f);
+    g.setGradientFill(panelLightGradient(inset, face, face.darker(0.025f)));
+    g.fillRoundedRectangle(inset, radius - 0.8f);
+}
+
+void drawStudioRotary(Graphics& g, Rectangle<float> bounds, float position, float start, float end,
+                      const juce::Slider& slider)
+{
+    const auto& c = studioGrayPalette;
+    const float diameter = std::min(bounds.getWidth(), bounds.getHeight()) * 0.86f;
+    const auto centre = bounds.getCentre().translated(0.0f, -diameter * 0.02f);
+    const auto ring = Rectangle<float>(diameter, diameter).withCentre(centre);
+    const auto cap = ring.reduced(diameter * 0.079f);
+    const bool enabled = slider.isEnabled();
+    const float angle = start + position * (end - start);
+    const float strokeWidth = diameter * 0.092f;
+    const juce::PathStrokeType arcStroke(strokeWidth);
+    const auto drawArc = [&](float to, Colour colour)
+    {
+        juce::Path arc;
+        const float radius = (diameter - strokeWidth) * 0.5f;
+        arc.addCentredArc(centre.x, centre.y, radius, radius, 0.0f, start, to, true);
+        g.setColour(colour);
+        g.strokePath(arc, arcStroke);
+    };
+
+    if (!enabled || position < 1.0f)
+        drawArc(end, enabled ? c.control.track : c.control.track.interpolatedWith(c.enclosure.plate, 0.62f));
+    if (enabled && angle > start)
+        drawArc(angle, c.control.fill);
+
+    const auto shadow = cap.translated(0.0f, diameter * 0.09f).expanded(diameter * 0.08f);
+    const auto shadowCentre = shadow.getCentre();
+    juce::ColourGradient falloff(Colour(0xa6221814), shadowCentre, juce::Colours::transparentBlack,
+                               shadowCentre.withX(shadow.getRight()), true);
+    falloff.addColour(0.68, Colour(0x62221814));
+    falloff.addColour(0.86, Colour(0x25221814));
+    g.setGradientFill(falloff);
+    g.fillEllipse(shadow);
+
+    const auto face = enabled ? c.control.face : c.control.face.interpolatedWith(c.enclosure.plate, 0.38f);
+    g.setGradientFill(panelLightGradient(cap, face, c.control.rim));
+    g.fillEllipse(cap);
+    const auto inset = cap.reduced(diameter * 0.027f);
+    g.setGradientFill({ c.control.shade, inset.getTopLeft(), face,
+                        inset.getTopLeft().translated(0.0f, inset.getHeight() * 0.24f), false });
+    g.fillEllipse(inset);
+
+    juce::Path pointer;
+    pointer.startNewSubPath(centre.getPointOnCircumference(diameter * 0.155f, angle));
+    pointer.lineTo(centre.getPointOnCircumference(diameter * 0.34f, angle));
+    const juce::PathStrokeType pointerStroke(diameter * 0.046f, juce::PathStrokeType::curved,
+                                            juce::PathStrokeType::rounded);
+    if (enabled)
+    {
+        g.setColour(Colour(0x3219110e));
+        g.strokePath(pointer, pointerStroke, juce::AffineTransform::translation(0.0f, diameter * 0.019f));
+    }
+    g.setColour(enabled ? c.control.pointer : c.control.pointer.interpolatedWith(face, 0.60f));
+    g.strokePath(pointer, pointerStroke);
+
+    if (enabled && slider.hasKeyboardFocus(true))
+    {
+        g.setColour(c.legend.ink);
+        g.drawEllipse(ring.expanded(1.7f), 1.0f);
+    }
+}
+
+void drawStudioFader(Graphics& g, Rectangle<float> bounds, float position, const juce::Slider& slider)
+{
+    const auto& c = studioGrayPalette;
+    const bool enabled = slider.isEnabled();
+    const float centre = bounds.getCentreX();
+    const auto track = bounds.withWidth(5.0f).withCentre(bounds.getCentre());
+    g.setColour(enabled ? c.control.track : c.enclosure.edge);
+    g.fillRoundedRectangle(track, 2.5f);
+    if (enabled && position < track.getBottom())
+    {
+        g.setColour(c.control.fill);
+        g.fillRoundedRectangle(track.withTop(position), 2.5f);
+    }
+
+    constexpr float radius = 3.0f;
+    const auto cap = Rectangle<float>(std::min(bounds.getWidth() - 4.0f, 25.0f), 15.0f).withCentre({ centre, position });
+    drawControlShadow(g, cap, radius, Colour(0x47221814));
+    drawStudioCap(g, cap, radius, enabled ? c.control.face : c.control.rim);
+    g.setColour(enabled ? c.control.pointer : c.legend.quiet.withAlpha(0.60f));
+    g.drawLine(cap.getX() + 6.0f, position, cap.getRight() - 6.0f, position, 1.5f);
+    if (enabled && slider.hasKeyboardFocus(true))
+        g.drawRoundedRectangle(cap.expanded(1.0f), radius + 1.0f, 1.0f);
 }
 
 void display(Graphics& g, Rectangle<int> bounds, const PanelPalette& palette)
@@ -260,7 +374,7 @@ public:
         const auto& c = palette();
         using UI = ColourScheme::UIColour;
         auto scheme = getDarkColourScheme();
-        if (isDark())
+        if (usesPaletteMenus())
         {
             scheme.setUIColour(UI::menuBackground, c.header.shell);
             scheme.setUIColour(UI::menuText, c.header.ink);
@@ -271,14 +385,17 @@ public:
     }
 
     PanelTheme getTheme() const { return theme; }
-    bool isDark() const { return theme != PanelTheme::classic; }
+    bool hasWoodCheeks() const { return theme == PanelTheme::classicDark || isMidnight(); }
     bool isMidnight() const { return theme == PanelTheme::midnight; }
+    bool isStudioGray() const { return theme == PanelTheme::studioGray; }
+    bool usesPaletteMenus() const { return hasWoodCheeks() || isStudioGray(); }
     const PanelPalette& palette() const
     {
         switch (theme)
         {
             case PanelTheme::classicDark: return classicDarkPalette;
             case PanelTheme::midnight: return midnightPalette;
+            case PanelTheme::studioGray: return studioGrayPalette;
             case PanelTheme::classic: return classicPalette;
         }
         return classicPalette;
@@ -289,6 +406,12 @@ public:
     void drawRotarySlider(Graphics& g, int x, int y, int w, int h, float position,
                           float start, float end, juce::Slider& slider) override
     {
+        if (isStudioGray())
+        {
+            drawStudioRotary(g, Rectangle<int>(x, y, w, h).toFloat(), position, start, end, slider);
+            return;
+        }
+
         const auto& c = palette();
         const bool hardware = isMidnight();
         const float diameter = static_cast<float>(std::min(w, h)) - 15.0f;
@@ -355,6 +478,12 @@ public:
     void drawLinearSlider(Graphics& g, int x, int y, int w, int h, float position, float, float,
                           juce::Slider::SliderStyle, juce::Slider& slider) override
     {
+        if (isStudioGray())
+        {
+            drawStudioFader(g, Rectangle<int>(x, y, w, h).toFloat(), position, slider);
+            return;
+        }
+
         const auto& c = palette();
         const float capRadius = isMidnight() ? 1.5f : 3.5f;
         const float cx = x + w * 0.5f;
@@ -420,10 +549,24 @@ public:
 
         const bool lit = enabled && button.getToggleState();
         const bool pressed = enabled && down;
-        const float opacity = enabled ? 1.0f : 0.48f;
         const auto offColour = button.findColour(juce::TextButton::buttonColourId);
         const auto face = area.translated(0.0f, pressed ? 1.4f : 0.0f);
         const auto base = lit ? colour : offColour;
+        if (isStudioGray())
+        {
+            const auto cap = !enabled ? base.interpolatedWith(c.enclosure.plate, 0.64f)
+                          : pressed ? base.darker(0.09f) : highlighted ? base.brighter(0.07f) : base;
+            drawControlShadow(g, area, radius, Colour(0xff221814).withAlpha(!enabled || pressed ? 0.14f : 0.34f));
+            drawStudioCap(g, face, radius, cap);
+            if (focused)
+            {
+                g.setColour(c.legend.ink);
+                g.drawRoundedRectangle(face.expanded(0.85f), radius + 0.85f, 1.0f);
+            }
+            return;
+        }
+
+        const float opacity = enabled ? 1.0f : 0.48f;
         const auto fill = pressed ? base.interpolatedWith(phosphor, 0.22f).darker(0.10f)
                                   : enabled && highlighted ? base.brighter(0.10f) : base;
 
@@ -459,13 +602,25 @@ public:
         const auto text = button.findColour(enabled && button.getToggleState() ? juce::TextButton::textColourOnId
                                                                                 : juce::TextButton::textColourOffId);
         label(g, button.getButtonText(), button.getLocalBounds().reduced(4, 2).translated(0, enabled && down ? 1 : -1),
-              button.getHeight() > 32 ? 14.0f : 12.0f, text.withMultipliedAlpha(enabled ? 1.0f : 0.40f),
+              button.getHeight() > 32 ? 14.0f : 12.0f,
+              text.withMultipliedAlpha(enabled ? 1.0f : isStudioGray() ? 0.55f : 0.40f),
               juce::Justification::centred, true);
     }
 
 private:
     PanelTheme theme = PanelTheme::classic;
 };
+
+constexpr const char* stringModeName = "Plucked String";
+
+const char* matrixTargetName(const Patch& patch, Destination target)
+{
+    static constexpr std::array<const char*, oscillatorCount> brightnessNames { "Bright A", "Bright B", "Bright C" };
+    for (int i = 0; i < oscillatorCount; ++i)
+        if (target == positionDestinations[i] && patch.osc[i].mode == OscillatorMode::pluckedString)
+            return brightnessNames[i];
+    return destinationNames[target];
+}
 
 struct MatrixRoute
 {
@@ -522,7 +677,7 @@ public:
                 const MatrixRoute route { source, static_cast<Destination>(target) };
                 if (selection == route)
                     selectedRow = getNumRows();
-                rows.push_back({ route, *amount });
+                rows.push_back({ route, *amount, matrixTargetName(patch, route.target) });
             }
 
         list.updateContent();
@@ -546,7 +701,7 @@ public:
     std::function<void()> onEditAmount, onClear;
 
 private:
-    struct Row { MatrixRoute route; float amount; };
+    struct Row { MatrixRoute route; float amount; const char* targetName; };
 
     void resized() override { list.setBounds(getLocalBounds().reduced(12, 8)); }
 
@@ -579,14 +734,14 @@ private:
     String getNameForRow(int index) override
     {
         if (!juce::isPositiveAndBelow(index, getNumRows())) return {};
-        const auto& [route, amount] = rows[index];
-        return String(sourceNames[route.source]) + " to " + destinationNames[route.target] + ", " + matrixAmountText(amount);
+        const auto& [route, amount, targetName] = rows[index];
+        return String(sourceNames[route.source]) + " to " + targetName + ", " + matrixAmountText(amount);
     }
 
     void paintListBoxItem(int index, Graphics& g, int width, int height, bool selected) override
     {
         if (!juce::isPositiveAndBelow(index, getNumRows())) return;
-        const auto& [route, amount] = rows[index];
+        const auto& [route, amount, targetName] = rows[index];
         const int divider = width * 2 / 3;
         const auto phosphor = skin.palette().display.phosphor;
         const auto colour = selected ? phosphor.brighter(0.12f) : phosphor;
@@ -602,7 +757,7 @@ private:
 
         constexpr float textInset = 12.0f;
         drawTextLine(g, sourceNames[route.source], textInset, height / 2 - 6, colour);
-        drawTextLine(g, destinationNames[route.target], textInset, height / 2 + 6, colour);
+        drawTextLine(g, targetName, textInset, height / 2 + 6, colour);
         centredPixels(g, matrixAmountText(amount), (divider + width) / 2, height / 2, colour);
     }
 
@@ -754,11 +909,12 @@ private:
         const bool down = note == mouseNote || computerHeld(note);
         const bool black = isBlack(note);
         const auto area = keyArea(note).reduced(0.7f, 0.0f);
-        g.setColour(down ? c.display.phosphor : black ? c.keys.blackEdge : c.keys.whiteEdge);
+        const auto pressedColour = skin.isStudioGray() ? c.control.fill : c.display.phosphor;
+        g.setColour(down ? pressedColour : black ? c.keys.blackEdge : c.keys.whiteEdge);
         g.fillRoundedRectangle(area, 3.0f);
         const auto face = area.withTrimmedBottom(black ? 4.0f : 3.0f);
-        const auto keyColour = down ? c.display.phosphor : black ? c.keys.black : c.keys.white;
-        if (skin.isMidnight())
+        const auto keyColour = down ? pressedColour : black ? c.keys.black : c.keys.white;
+        if (skin.isMidnight() || skin.isStudioGray())
             g.setGradientFill(panelLightGradient(face, keyColour.brighter(black ? 0.28f : 0.12f),
                                                  keyColour.darker(black ? 0.23f : 0.07f)));
         else
@@ -815,7 +971,7 @@ public:
     bool playComputerKey(const juce::KeyPress& press) { return keys.playComputerKey(press); }
     bool releaseComputerKeys() { return keys.releaseComputerKeys(); }
     void releasePerformanceKeys() { keys.release(); }
-    bool hasWoodCheeks() const { return skin.isDark(); }
+    bool hasWoodCheeks() const { return skin.hasWoodCheeks(); }
     bool hasTopRail() const { return skin.isMidnight(); }
 
     Rectangle<int> faceplateBounds() const
@@ -968,6 +1124,8 @@ private:
     {
         skin.setTheme(theme);
         const auto& c = skin.palette();
+        const auto activeFace = skin.isStudioGray() ? c.button.active : c.display.phosphor;
+        const auto activeText = skin.isStudioGray() ? c.button.activeText : c.display.glass;
         for (const auto& [control, style] : buttons)
         {
             const auto face = style == ButtonStyle::display ? juce::Colours::transparentBlack
@@ -975,10 +1133,10 @@ private:
                             : style == ButtonStyle::header ? c.button.header : c.button.panel;
             control->setColour(juce::TextButton::buttonColourId, face);
             control->setColour(juce::TextButton::buttonOnColourId,
-                               style == ButtonStyle::display ? face : c.display.phosphor);
+                               style == ButtonStyle::display ? face : activeFace);
             control->setColour(juce::TextButton::textColourOffId,
                                style == ButtonStyle::panel ? c.legend.ink : c.header.ink);
-            control->setColour(juce::TextButton::textColourOnId, c.display.glass);
+            control->setColour(juce::TextButton::textColourOnId, activeText);
         }
         for (auto& row : oscillatorKnobs)
             row[volumeColumn]->setColour(juce::Slider::thumbColourId, c.control.warm);
@@ -1061,11 +1219,21 @@ private:
         {
             engineButtons[i]->setToggleState(engine == i, juce::dontSendNotification);
             const auto& current = p.osc[i];
-            const String title = "Oscillator " + String(oscillatorNames[i]) + " wavetable: " + tableNames[current.table];
+            const bool string = current.mode == OscillatorMode::pluckedString;
+            const auto* name = string ? stringModeName : tableNames[current.table];
+            const String title = "Oscillator " + String(oscillatorNames[i]) + ": " + name;
             tableButtons[i]->setTitle(title);
             tableButtons[i]->setTooltip(title + ". Click to choose.");
-            oscillatorKnobs[i][positionColumn]->setEnabled(!isFixedTable(current.table));
+            auto& position = *oscillatorKnobs[i][positionColumn];
+            position.setEnabled(!isFixedTable(current.table));
+            position.setVisible(!string);
+            brightnessKnobs[i]->setVisible(string);
         }
+        const bool stringSetup = osc.mode == OscillatorMode::pluckedString;
+        phaseButton->setVisible(!stringSetup);
+        viewButton->setVisible(!stringSetup);
+        setupKnobs[2]->setVisible(!stringSetup);
+        stringDecayKnob->setVisible(stringSetup);
         viewButton->setButtonText(stacked[engine] ? "STACK" : "CYCLE");
         viewButton->setToggleState(stacked[engine], juce::dontSendNotification);
         phaseButton->setButtonText(osc.resetPhase ? "RESET" : "FREE");
@@ -1147,7 +1315,7 @@ private:
             const String tag(oscillatorNames[i]);
             const String name = "Oscillator " + tag;
             const auto row = [i] { return i; };
-            tableButtons[i] = &button({}, name + " wavetable", oscillatorDisplay(i),
+            tableButtons[i] = &button({}, name + " sound", oscillatorDisplay(i),
                                       [this, i] { showTables(i); }, ButtonStyle::display);
 
             auto& knobs = oscillatorKnobs[i];
@@ -1158,6 +1326,8 @@ private:
                 if (isFixedTable(selectedTable)) return String("FIXED");
                 return percent(selectedTable == pulseTable ? pulseDuty(static_cast<float>(v)) : v);
             });
+            brightnessKnobs[i] = &oscSlider(&Oscillator::brightness, row, name + " string brightness",
+                                           oscillatorKnob(i, positionColumn), 0, 1, 0.001, percent);
             knobs[tuneColumn] = &oscSlider(&Oscillator::semitone, row, name + " tune in semitones",
                                            oscillatorKnob(i, tuneColumn), -maxOscillatorSemitones, maxOscillatorSemitones,
                                            1, [](double v) { return signedValue(juce::roundToInt(v), " st"); });
@@ -1197,6 +1367,8 @@ private:
         });
         setupKnobs[2] = &oscSlider(&Oscillator::phase, selected, "Oscillator start phase in reset mode", { 420, 475, 41, 37 },
                                    0, 1, 0.005, [](double v) { return String(juce::roundToInt(v * 360)); });
+        stringDecayKnob = &oscSlider(&Oscillator::stringDecay, selected, "Plucked string decay time", { 420, 475, 41, 37 },
+                                    minStringDecay, maxStringDecay, 0.01, [](double v) { return String(v, 2) + " s"; });
     }
 
     void createFilter()
@@ -1329,7 +1501,7 @@ private:
             juce::PopupMenu destinations;
             addMatrixDestinations(destinations, [&](Destination target)
             {
-                destinations.addItem(1 + source * destinationCount + target, destinationNames[target],
+                destinations.addItem(1 + source * destinationCount + target, matrixTargetName(p, target),
                                      true, p.matrix[source][target].has_value());
             });
             menu.addSubMenu(sourceNames[source], destinations);
@@ -1361,7 +1533,7 @@ private:
         addMatrixDestinations(menu, [&](Destination target)
         {
             const bool selected = target == route.target;
-            menu.addItem(target + 1, destinationNames[target], selected || !matrixTargetInUse(p, target), selected);
+            menu.addItem(target + 1, matrixTargetName(p, target), selected || !matrixTargetInUse(p, target), selected);
         });
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(matrixTarget).withMaximumNumColumns(1),
             [safe = SafePointer<Surface>(this), route](int id)
@@ -1505,23 +1677,36 @@ private:
 
     void showTables(int row)
     {
+        static constexpr int stringId = tableCount + 1;
         engine = row;
         syncControls();
-        const auto current = audio.patch().sound.osc[row].table;
+        const auto& current = audio.patch().sound.osc[row];
+        const bool string = current.mode == OscillatorMode::pluckedString;
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.usesPaletteMenus()) menu.setLookAndFeel(&skin);
+        menu.addSectionHeader("Physical model");
+        menu.addItem(stringId, stringModeName, true, string);
+        menu.addSeparator();
         menu.addSectionHeader("Classic analog");
         for (int table = sineTable; table < tableCount; ++table)
-            menu.addItem(table + 1, tableNames[table], true, table == current);
+            menu.addItem(table + 1, tableNames[table], true, !string && table == current.table);
         menu.addSeparator();
         menu.addSectionHeader("Morphing tables");
         for (int table = basicShapes; table < sineTable; ++table)
-            menu.addItem(table + 1, tableNames[table], true, table == current);
+            menu.addItem(table + 1, tableNames[table], true, !string && table == current.table);
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(tableButtons[row]),
             [safe = SafePointer<Surface>(this), row](int id)
         {
-            if (safe != nullptr && id > 0 && safe->audio.patch().sound.osc[row].table != id - 1)
-                safe->edit([row, id](Patch& p) { p.osc[row].table = id - 1; });
+            if (safe == nullptr || id <= 0) return;
+            const auto mode = id == stringId ? OscillatorMode::pluckedString : OscillatorMode::waveform;
+            const auto& osc = safe->audio.patch().sound.osc[row];
+            if (osc.mode != mode || (mode == OscillatorMode::waveform && osc.table != id - 1))
+                safe->edit([row, id, mode](Patch& p)
+                {
+                    p.osc[row].mode = mode;
+                    if (mode == OscillatorMode::waveform)
+                        p.osc[row].table = id - 1;
+                });
         });
     }
 
@@ -1543,7 +1728,7 @@ private:
     {
         keys.release();
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.usesPaletteMenus()) menu.setLookAndFeel(&skin);
         for (int i = 0; i < presetCount; ++i)
             menu.addItem(i + 1, String(i + 1).paddedLeft('0', 2) + "   " + String(factoryPresets()[i].name),
                          true, i == presetSlot && !edited);
@@ -1602,7 +1787,7 @@ private:
         keys.release();
         auto outputs = audio.outputs();
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.usesPaletteMenus()) menu.setLookAndFeel(&skin);
         menu.addSectionHeader("Audio output");
         if (outputs.empty()) menu.addItem(-1, "No devices available", false);
         String lastType;
@@ -1693,9 +1878,9 @@ private:
         }
         else
         {
-            g.setColour(phosphor);
+            g.setColour(skin.isStudioGray() ? c.control.fill : phosphor);
             g.fillRoundedRectangle({ 41, 39, 41, 39 }, 4.0f);
-            g.setColour(c.header.shell);
+            g.setColour(skin.isStudioGray() ? c.header.ink : c.header.shell);
         }
         for (int i = 0; i < 5; ++i)
         {
@@ -1713,7 +1898,8 @@ private:
         if (!keys.isVisible() && juce::Time::getMillisecondCounterHiRes() < messageEnd)
             label(g, message, headerNotice, 12.5f, messageIsError ? c.header.clip : c.header.ink);
 
-        if (hardware)
+        const bool meterDisplay = hardware || skin.isStudioGray();
+        if (meterDisplay)
         {
             display(g, { 1092, 35, 164, 48 }, c);
             pixels(g, "OUT", 1102, 44, 1, phosphor.withAlpha(0.75f));
@@ -1725,12 +1911,12 @@ private:
         for (int i = 0; i < 13; ++i)
         {
             const bool lit = db > -54.0f + 4.5f * i;
-            const auto colour = hardware ? phosphor.withAlpha(lit ? (i >= 11 ? 1.0f : 0.8f) : 0.15f)
-                                         : lit ? (i >= 11 ? c.header.clip : c.header.meter) : c.header.unlit;
+            const auto colour = meterDisplay ? phosphor.withAlpha(lit ? (i >= 11 ? 1.0f : 0.8f) : 0.15f)
+                                             : lit ? (i >= 11 ? c.header.clip : c.header.meter) : c.header.unlit;
             g.setColour(colour);
-            const int x = 1102 + (hardware ? 11 : 12) * i;
-            const Rectangle<float> led { static_cast<float>(x), 61.0f, hardware ? 8.5f : 9.0f, 9.0f };
-            g.fillRoundedRectangle(led, hardware ? 0.75f : 1.5f);
+            const int x = 1102 + (meterDisplay ? 11 : 12) * i;
+            const Rectangle<float> led { static_cast<float>(x), 61.0f, meterDisplay ? 8.5f : 9.0f, 9.0f };
+            g.fillRoundedRectangle(led, meterDisplay ? 0.75f : 1.5f);
         }
     }
 
@@ -1738,25 +1924,37 @@ private:
     {
         if (!g.clipRegionIntersects(oscPanel)) return;
         const auto& c = skin.palette();
-        paintSectionHeading(g, oscPanel, "TABLE OSC");
+        paintSectionHeading(g, oscPanel, "OSCILLATORS");
+        const auto& oscillators = audio.patch().sound.osc;
+        const bool anyStrings = std::any_of(oscillators.begin(), oscillators.end(),
+            [](const Oscillator& osc) { return osc.mode == OscillatorMode::pluckedString; });
         for (int column = 0; column < static_cast<int>(oscillatorColumns.size()); ++column)
         {
             const int x = oscillatorColumnX(column);
-            label(g, oscillatorColumns[column], { x - 31, 143, 62, 20 }, 14.0f, c.legend.ink,
+            const auto* caption = column == positionColumn && anyStrings ? "SHAPE" : oscillatorColumns[column];
+            label(g, caption, { x - 31, 143, 62, 20 }, 14.0f, c.legend.ink,
                   juce::Justification::centred, true);
         }
         for (int row = 0; row < oscillatorCount; ++row)
         {
             const auto area = oscillatorDisplay(row);
-            g.setColour(skin.isMidnight() ? c.enclosure.edge : c.legend.quiet.withAlpha(0.65f));
-            g.drawHorizontalLine(oscillatorKnob(row, positionColumn).getCentreY(), static_cast<float>(area.getRight()),
-                                 static_cast<float>(oscillatorColumnX(volumeColumn)));
-            paintWavetable(g, row, area);
-            for (auto* knob : oscillatorKnobs[row])
+            if (!skin.isStudioGray())
             {
+                g.setColour(skin.isMidnight() ? c.enclosure.edge : c.legend.quiet.withAlpha(0.65f));
+                g.drawHorizontalLine(oscillatorKnob(row, positionColumn).getCentreY(), static_cast<float>(area.getRight()),
+                                     static_cast<float>(oscillatorColumnX(volumeColumn)));
+            }
+            paintOscillatorDisplay(g, row, area);
+            const bool string = oscillators[row].mode == OscillatorMode::pluckedString;
+            for (int column = 0; column < static_cast<int>(oscillatorColumns.size()); ++column)
+            {
+                auto* knob = column == positionColumn && string ? brightnessKnobs[row] : oscillatorKnobs[row][column];
                 const auto bounds = knob->getBounds();
                 const Rectangle<int> readout { bounds.getX() + 8, bounds.getBottom() + 1, bounds.getWidth() - 16, 16 };
-                label(g, knob->getTextFromValue(knob->getValue()), readout, 12.0f,
+                auto text = knob->getTextFromValue(knob->getValue());
+                if (column == positionColumn && anyStrings && knob->isEnabled())
+                    text = String(string ? "BRI " : oscillators[row].table == pulseTable ? "PW " : "POS ") + text;
+                label(g, text, readout, 12.0f,
                       knob->isEnabled() ? c.legend.ink : c.legend.quiet, juce::Justification::centred);
             }
         }
@@ -1764,19 +1962,25 @@ private:
         g.setColour(c.enclosure.edge);
         g.drawHorizontalLine(470, 37.0f, 482.0f);
         label(g, "OSC SETUP", { 38, 477, 90, 18 }, 11.0f, c.legend.quiet, juce::Justification::centredLeft, true);
-        label(g, "PHASE MODE", { 132, 477, 73, 18 }, 11.0f, c.legend.quiet, juce::Justification::centred, true);
-        label(g, "DISPLAY", { 201, 477, 69, 18 }, 11.0f, c.legend.quiet, juce::Justification::centred, true);
+        const bool stringSetup = oscillators[engine].mode == OscillatorMode::pluckedString;
+        if (!stringSetup)
+        {
+            label(g, "PHASE MODE", { 132, 477, 73, 18 }, 11.0f, c.legend.quiet, juce::Justification::centred, true);
+            label(g, "DISPLAY", { 201, 477, 69, 18 }, 11.0f, c.legend.quiet, juce::Justification::centred, true);
+        }
         static constexpr const char* captions[] { "OCT", "PAN", "PHASE" };
         for (int i = 0; i < static_cast<int>(setupKnobs.size()); ++i)
         {
-            auto& knob = *setupKnobs[i];
-            const auto text = String(captions[i]) + " " + knob.getTextFromValue(knob.getValue());
-            label(g, text, { knob.getBounds().getCentreX() - 33, 511, 66, 15 }, 11.0f,
+            const bool decay = i == 2 && stringSetup;
+            auto& knob = *(decay ? stringDecayKnob : setupKnobs[i]);
+            const auto text = String(decay ? "DECAY" : captions[i]) + " " + knob.getTextFromValue(knob.getValue());
+            const int width = decay ? 78 : 66;
+            label(g, text, { knob.getBounds().getCentreX() - width / 2, 511, width, 15 }, 11.0f,
                   c.legend.quiet, juce::Justification::centred);
         }
     }
 
-    void paintWavetable(Graphics& g, int row, Rectangle<int> area) const
+    void paintOscillatorDisplay(Graphics& g, int row, Rectangle<int> area) const
     {
         const auto& palette = skin.palette();
         const auto phosphor = palette.display.phosphor;
@@ -1785,10 +1989,32 @@ private:
         const auto x = static_cast<float>(area.getX() + 11), end = static_cast<float>(area.getRight() - 11);
         const auto top = static_cast<float>(area.getY());
         pixels(g, "OSC " + String(oscillatorNames[row]), x, top + 11, 1, phosphor.withAlpha(row == engine ? 1.0f : 0.65f));
-        pixels(g, tableNames[osc.table], x, top + 26, displayTextScale, phosphor);
+        const bool string = osc.mode == OscillatorMode::pluckedString;
+        pixels(g, string ? stringModeName : tableNames[osc.table], x, top + 26, displayTextScale, phosphor);
         g.setColour(phosphor.withAlpha(0.7f));
         g.drawLine(end - 7, top + 13, end - 3, top + 17, 1.2f);
         g.drawLine(end - 3, top + 17, end + 1, top + 13, 1.2f);
+        if (string)
+        {
+            const float centre = top + 65.0f;
+            g.setColour(phosphor.withAlpha(0.19f));
+            g.drawHorizontalLine(area.getY() + 65, x, end);
+            juce::Path trace;
+            for (int i = 0; i <= 128; ++i)
+            {
+                const float t = i / 128.0f;
+                const float angle = juce::MathConstants<float>::twoPi * 5.0f * t;
+                const float fundamental = std::sin(angle);
+                const float overtone = 0.42f * osc.brightness * std::sin(2.0f * angle) * std::exp(-3.0f * t);
+                const float value = (fundamental + overtone) * std::exp(-6.90775528f * t / osc.stringDecay);
+                const float px = x + (end - x) * t, py = centre - 22.0f * value;
+                if (i == 0) trace.startNewSubPath(px, py);
+                else trace.lineTo(px, py);
+            }
+            g.setColour(phosphor);
+            g.strokePath(trace, juce::PathStrokeType(1.5f));
+            return;
+        }
         const auto plot = [&](float frame, float y, float extent, float strength, float stroke)
         {
             juce::Path path;
@@ -1837,8 +2063,8 @@ private:
     void paintPerformance(Graphics& g) const
     {
         const auto& c = skin.palette();
-        const bool hardware = skin.isMidnight();
-        if (hardware)
+        const bool statusDisplay = skin.isMidnight() || skin.isStudioGray();
+        if (statusDisplay)
         {
             display(g, { 120, 709, 259, 52 }, c);
             const auto keyBed = keys.getBounds().toFloat().expanded(5.0f, 4.0f);
@@ -1852,15 +2078,15 @@ private:
         g.drawVerticalLine(385, 686.0f, 758.0f);
         label(g, "PERFORMANCE", { 128, 687, 244, 20 }, 13.0f, c.legend.ink, juce::Justification::centredLeft, true);
         const auto info = "MIDI " + String(audio.inputCount()) + " IN  /  " + String(audio.voiceCount()).paddedLeft('0', 2) + " VOICES";
-        pixels(g, info, 128, 718, 1, hardware ? c.display.phosphor : c.legend.cool.darker(0.2f));
-        g.setColour(hardware ? c.display.phosphor.withAlpha(audio.hasRecentMidiNote() ? 1.0f : 0.22f)
-                             : audio.hasRecentMidiNote() ? c.legend.warm : c.legend.quiet.withAlpha(0.25f));
+        pixels(g, info, 128, 718, 1, statusDisplay ? c.display.phosphor : c.legend.cool.darker(0.2f));
+        g.setColour(statusDisplay ? c.display.phosphor.withAlpha(audio.hasRecentMidiNote() ? 1.0f : 0.22f)
+                                  : audio.hasRecentMidiNote() ? c.legend.warm : c.legend.quiet.withAlpha(0.25f));
         g.fillEllipse(134.0f + 6.0f * info.length(), 719.0f, 5.0f, 5.0f);
         const bool showNotice = juce::Time::getMillisecondCounterHiRes() < messageEnd;
         const auto status = showNotice ? message : audio.unavailableInputs() > 0
             ? String(audio.unavailableInputs()) + " MIDI input(s) unavailable" : audio.audioStatus();
-        const auto statusInk = hardware ? c.display.phosphor.withAlpha(showNotice && messageIsError ? 1.0f : 0.76f)
-                                       : showNotice && messageIsError ? c.legend.warm : c.legend.quiet;
+        const auto statusInk = statusDisplay ? c.display.phosphor.withAlpha(showNotice && messageIsError ? 1.0f : 0.76f)
+                                             : showNotice && messageIsError ? c.legend.warm : c.legend.quiet;
         label(g, status, { 128, 736, 247, 19 }, 12.5f, statusInk);
         label(g, "KEY OCT " + String(octave), { 399, 689, 89, 25 }, 12.0f, c.legend.ink,
               juce::Justification::centred, true);
@@ -1879,7 +2105,9 @@ private:
     juce::File fileDirectory;
     std::array<juce::TextButton*, oscillatorCount> engineButtons {}, tableButtons {};
     std::array<std::array<juce::Slider*, oscillatorColumns.size()>, oscillatorCount> oscillatorKnobs {};
+    std::array<juce::Slider*, oscillatorCount> brightnessKnobs {};
     std::array<juce::Slider*, 3> setupKnobs {};
+    juce::Slider* stringDecayKnob = nullptr;
     std::array<bool, oscillatorCount> stacked { true, true, true };
     std::array<juce::TextButton*, 2> shapeButtons {}, lfoModeButtons {};
     std::array<juce::TextButton*, 3> modeButtons {};

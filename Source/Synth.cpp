@@ -14,6 +14,47 @@ float lerp(float a, float b, float t) noexcept { return a + (b - a) * t; }
 float unit(float x) noexcept { return std::clamp(x, 0.0f, 1.0f); }
 float bipolar(float x) noexcept { return std::clamp(x, -1.0f, 1.0f); }
 
+constexpr float oscillatorCeiling = 0.46f;
+const auto stringModes = []
+{
+    // A triangular displacement gives sin(n * pi / 5) / n^2.
+    // Reading its velocity adds one factor of n to each mode.
+    std::array<float, 16> modes {};
+    constexpr float pluckPoint = pi / 5.0f;
+    const float scale = 0.65f / std::sin(pluckPoint);
+    for (std::size_t index = 0; index < modes.size(); ++index)
+    {
+        const float harmonic = static_cast<float>(index + 1);
+        modes[index] = scale * std::sin(harmonic * pluckPoint) / harmonic;
+    }
+    return modes;
+}();
+
+float stringSample(float phase, float frequency, float rate, float overtoneTilt) noexcept
+{
+    const float ceiling = oscillatorCeiling * rate;
+    if (frequency >= ceiling)
+        return 0.0f;
+
+    const float angle = 2.0f * pi * phase;
+    const float twiceCosine = 2.0f * std::cos(angle);
+    const float fadeScale = 1.0f / (ceiling * 0.15f);
+    float previous = 0.0f, current = std::sin(angle);
+    float output = 0.0f, gain = 1.0f, modeFrequency = frequency;
+    for (float weight : stringModes)
+    {
+        if (modeFrequency >= ceiling)
+            break;
+        output += current * weight * gain * std::min(1.0f, (ceiling - modeFrequency) * fadeScale);
+        const float next = twiceCosine * current - previous;
+        previous = current;
+        current = next;
+        gain *= overtoneTilt;
+        modeFrequency += frequency;
+    }
+    return output;
+}
+
 struct Harmonic { float sine, cosine; };
 
 int storedFrames(int table) noexcept
@@ -179,7 +220,7 @@ float WaveBank::display(int table, float position, float phase) const noexcept
 
 float WaveBank::sample(int table, float position, float phase, float frequency, float sampleRate) const noexcept
 {
-    const float ceiling = 0.46f * sampleRate;
+    const float ceiling = oscillatorCeiling * sampleRate;
     if (frequency >= ceiling)
         return 0.0f;
     const float mip = std::clamp(1.0f + std::log2(frequency * (1 << (bands - 1)) / ceiling),
@@ -248,6 +289,7 @@ void Synth::prepare(double newRate)
     rate = static_cast<float>(std::max(1.0, newRate));
     effects.prepare(rate, patch);
     seconds = 1.0f / rate;
+    updateStringDecay();
     smoothing = 1.0f - std::exp(-seconds / 0.006f);
     tableStep = seconds / 0.012f;
     voices = {};
@@ -266,6 +308,7 @@ void Synth::setPatch(const Patch& newPatch) noexcept
     const auto previousMode = patch.voicing.mode;
     const auto previousArp = patch.arp;
     patch = newPatch;
+    updateStringDecay();
     patch.arp.tempo = std::clamp(patch.arp.tempo, minArpTempo, maxArpTempo);
     const int count = std::clamp(patch.voicing.unison, 1, maxUnison);
     patch.voicing.unison = count;
@@ -315,6 +358,17 @@ void Synth::setPatch(const Patch& newPatch) noexcept
                 v.glideSamples = 0;
             }
     controlStep = 0;
+}
+
+void Synth::updateStringDecay() noexcept
+{
+    for (int i = 0; i < oscillatorCount; ++i)
+    {
+        const auto decay = std::clamp(patch.osc[i].stringDecay, minStringDecay, maxStringDecay);
+        const float logLoss = -6.90775528f * seconds / decay;
+        stringLoss[i] = std::exp(logLoss);
+        stringOvertoneLoss[i] = std::exp(0.32f * logLoss);
+    }
 }
 
 void Synth::advance(float& phase, float increment) const noexcept
@@ -390,7 +444,7 @@ void Synth::trigger(Voice& v, const Event& e, double glideFrom) noexcept
     setVoiceNote(v, e, glideFrom);
     v.velocityGain = v.velocity;
     v.amp.stage = v.filter.stage = Env::attack;
-    for (std::size_t i = 0; i < v.layers.size(); ++i)
+    for (int i = 0; i < oscillatorCount; ++i)
     {
         const auto& osc = patch.osc[i];
         const auto seed = static_cast<std::uint32_t>(v.age) * 2654435761u + static_cast<std::uint32_t>(i) * 2246822519u;
@@ -402,7 +456,21 @@ void Synth::trigger(Voice& v, const Event& e, double glideFrom) noexcept
         }
         v.table[i] = v.previousTable[i] = osc.table;
         v.tableMix[i] = 1.0f;
+        if (osc.mode == OscillatorMode::pluckedString)
+        {
+            v.strings[i].selected = true;
+            v.strings[i].mix = 1.0f;
+            pluck(v, i);
+        }
     }
+}
+
+void Synth::pluck(Voice& v, int oscillator) noexcept
+{
+    auto& string = v.strings[oscillator];
+    string.energy = string.overtoneEnergy = 1.0f;
+    for (auto& layer : v.layers[oscillator])
+        layer.stringPhase = 0.0f;
 }
 
 void Synth::trackNotes(const Event& e) noexcept
@@ -677,7 +745,17 @@ void Synth::updateVoice(Voice& v) noexcept
         const float tune = 12.0f * osc.octave + osc.semitone + osc.fine * 0.01f
                            + 2.0f * v.controls.bend + 12.0f * bipolar(mod[pitchDestinations[i]]);
         v.targetTuning[i] = std::exp2(tune / 12.0f);
-        v.targetPosition[i] = unit(osc.position + mod[positionDestinations[i]]);
+        const float positionMod = mod[positionDestinations[i]];
+        v.targetPosition[i] = unit(osc.position + positionMod);
+        auto& string = v.strings[i];
+        string.targetBrightness = unit(osc.brightness + positionMod);
+        if (v.fresh)
+            string.brightness = string.targetBrightness;
+        const bool selectString = osc.mode == OscillatorMode::pluckedString;
+        if (selectString && !string.selected && string.mix == 0.0f
+            && v.amp.stage != Env::release && v.amp.stage != Env::idle)
+            pluck(v, i);
+        string.selected = selectString;
         const int count = patch.voicing.unison;
         const float centre = bipolar(osc.pan + mod[pan] + mod[panDestinations[i]]);
         const float level = unit(osc.level + mod[levelDestinations[i]]) / count;
@@ -768,6 +846,14 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
                 v.tuning[i] = lerp(v.tuning[i], v.targetTuning[i], smoothing);
                 v.position[i] = lerp(v.position[i], v.targetPosition[i], smoothing);
                 const float base = static_cast<float>(v.noteFrequency) * v.tuning[i];
+                auto& string = v.strings[i];
+                const bool ring = string.energy > 0.0f;
+                float overtoneTilt = 0.0f;
+                if (string.selected || string.mix > 0.0f)
+                {
+                    string.brightness = lerp(string.brightness, string.targetBrightness, smoothing);
+                    overtoneTilt = lerp(0.35f, 1.0f, string.brightness) * string.overtoneEnergy;
+                }
                 for (int index = 0; index < maxUnison; ++index)
                 {
                     auto& layer = v.layers[i][index];
@@ -779,16 +865,42 @@ void Synth::render(float* left, float* right, int samples, const Event* events, 
                     const float hz = base * layer.ratio;
                     if (layer.gainL + layer.gainR > 0.00001f)
                     {
-                        float value = waveBank.sample(v.table[i], v.position[i], layer.phase, hz, rate);
-                        if (v.tableMix[i] < 1.0f)
+                        float value = 0.0f;
+                        if (string.mix < 1.0f)
                         {
-                            const float previous = waveBank.sample(v.previousTable[i], v.position[i], layer.phase, hz, rate);
-                            value = lerp(previous, value, v.tableMix[i]);
+                            value = waveBank.sample(v.table[i], v.position[i], layer.phase, hz, rate);
+                            if (v.tableMix[i] < 1.0f)
+                            {
+                                const float previous = waveBank.sample(v.previousTable[i], v.position[i], layer.phase, hz, rate);
+                                value = lerp(previous, value, v.tableMix[i]);
+                            }
+                        }
+                        if (string.mix > 0.0f)
+                        {
+                            const float plucked = ring ? string.energy * stringSample(layer.stringPhase, hz, rate, overtoneTilt)
+                                                       : 0.0f;
+                            value = lerp(value, plucked, string.mix);
                         }
                         voiceL += value * layer.gainL;
                         voiceR += value * layer.gainR;
                     }
+                    if (ring)
+                        advance(layer.stringPhase, hz * seconds);
                     advance(layer.phase, hz * seconds);
+                }
+                if (ring)
+                {
+                    string.energy *= stringLoss[i];
+                    string.overtoneEnergy *= stringOvertoneLoss[i];
+                    if (string.energy < 1.0e-7f)
+                        string.energy = string.overtoneEnergy = 0.0f;
+                }
+                const bool fading = string.selected ? string.mix < 1.0f : string.mix > 0.0f;
+                if (fading)
+                {
+                    string.mix = unit(string.mix + (string.selected ? tableStep : -tableStep));
+                    if (!string.selected && string.mix == 0.0f)
+                        string.energy = string.overtoneEnergy = 0.0f;
                 }
                 v.tableMix[i] = unit(v.tableMix[i] + tableStep);
             }

@@ -41,7 +41,7 @@ float peak(const std::vector<float>& values)
     return max;
 }
 
-float pitch(const std::vector<float>& values, int begin, int end)
+float pitch(const std::vector<float>& values, int begin, int end, int sampleRate = 48000)
 {
     float first = 0.0f, last = 0.0f;
     int crossings = 0;
@@ -53,7 +53,7 @@ float pitch(const std::vector<float>& values, int begin, int end)
                 first = last;
         }
     check(crossings >= 2, "Not enough cycles to measure pitch");
-    return (crossings - 1) * 48000.0f / (last - first);
+    return (crossings - 1) * static_cast<float>(sampleRate) / (last - first);
 }
 
 Patch sinePatch()
@@ -239,6 +239,126 @@ void analogOscillators(const WaveBank& bank)
         const float expected = semitones < 0 ? 110.0f : 1760.0f;
         check(std::abs(pitch(shifted.left, 4800, 9600) - expected) < 1.0f, "Two-octave oscillator tune is incorrect");
     }
+}
+
+void pluckedStrings(const WaveBank& bank)
+{
+    const Event a440 { EventType::noteOn, 0, 1, 69 };
+    const Event a220 { EventType::noteOn, 0, 1, 57 };
+    Synth synth(bank);
+    Patch p;
+    p.ampEnv = { 0.002f, 0.02f, 1.0f, 0.10f };
+    p.cutoff = 14000.0f;
+    auto& string = p.osc[0];
+    string.mode = OscillatorMode::pluckedString;
+    string.brightness = 0.0f;
+
+    for (int rate : { 44100, 48000, 96000 })
+    {
+        synth.prepare(rate);
+        synth.setPatch(p);
+        const Block pluck(synth, rate / 5, { a440 });
+        const float frequency = pitch(pluck.left, rate / 20, rate / 5, rate);
+        check(std::abs(frequency - 440.0f) < 1.0f, "String pitch changed with sample rate");
+    }
+
+    const auto renderPluck = [&]
+    {
+        synth.prepare(48000);
+        synth.setPatch(p);
+        return Block(synth, 3000, { a440 });
+    };
+    const auto overtone = [](const Block& block)
+    {
+        constexpr double angleStep = 6.283185307179586 * 880.0 / 48000.0;
+        double sine = 0.0, cosine = 0.0;
+        for (int i = 480; i < 2880; ++i)
+        {
+            sine += block.left[i] * std::sin(angleStep * i);
+            cosine += block.left[i] * std::cos(angleStep * i);
+        }
+        return std::hypot(sine, cosine);
+    };
+    const Block dark = renderPluck();
+    string.brightness = 1.0f;
+    const Block bright = renderPluck();
+    check(overtone(bright) > 2.0 * overtone(dark), "String brightness did not change overtone level");
+    string.brightness = 0.0f;
+    p.matrix[velocity][positionA] = 1.0f;
+    check(renderPluck().left == bright.left, "Position route did not set string brightness");
+    p.matrix[velocity][positionA].reset();
+
+    string.stringDecay = minStringDecay;
+    renderPluck();
+    Block(synth, 14400);
+    const Block shortRing(synth, 4800);
+    string.stringDecay = maxStringDecay;
+    renderPluck();
+    Block(synth, 14400);
+    const Block longRing(synth, 4800);
+    check(peak(shortRing.left) < 1.0e-5f && peak(longRing.left) > 0.02f, "String decay did not control ring time");
+
+    string.stringDecay = minStringDecay;
+    p.voicing.mode = PlayMode::legato;
+    renderPluck();
+    Block(synth, 14400);
+    const Block connected(synth, 3000, { a220 });
+    check(peak(connected.left) < 1.0e-5f, "Legato re-excited the string");
+    p.voicing.mode = PlayMode::mono;
+    renderPluck();
+    Block(synth, 14400);
+    const Block picked(synth, 3000, { a220 });
+    check(peak(picked.left) > 0.02f, "Mono did not re-excite the string");
+    const Block panic(synth, 4800, { { EventType::panic } });
+    check(synth.activeVoices() == 0 && panic.left.back() == 0.0f, "Panic left a ringing string");
+
+    p.voicing.mode = PlayMode::poly;
+    string.level = 0.0f;
+    renderPluck();
+    Block(synth, 14400);
+    string.level = 0.8f;
+    synth.setPatch(p);
+    check(peak(Block(synth, 3000).left) < 1.0e-5f, "A muted string stopped decaying");
+
+    string.mode = OscillatorMode::waveform;
+    p.osc[0].table = sineTable;
+    const Block wave = renderPluck();
+    string.mode = OscillatorMode::pluckedString;
+    synth.setPatch(p);
+    const Block switched(synth, 3000);
+    check(std::abs(switched.left.front() - wave.left.back()) < 0.015f && peak(switched.left) > 0.02f,
+          "Live string selection did not crossfade and excite the held note");
+    Block(synth, 14400);
+    check(peak(Block(synth, 3000).left) < 1.0e-5f, "A string selected on a held note did not decay");
+
+    auto wire = factoryPresets().back().sound;
+    wire.osc[0].pan = -1.0f;
+    wire.osc[1].pan = 1.0f;
+    synth.prepare(48000);
+    synth.setPatch(wire);
+    const Block onset(synth, 4800, { a440 });
+    Block(synth, 48000);
+    const Block sustain(synth, 4800);
+    check(peak(onset.left) > 0.02f && peak(sustain.left) < 1.0e-5f && peak(sustain.right) > 0.01f,
+          "Wire Bloom did not pair a string attack with a sustained wavetable");
+
+    p.voicing = { PlayMode::poly, 0.0f, maxUnison, 50.0f, 1.0f };
+    string.level = 0.9f;
+    p.osc.fill(string);
+    p.osc[1].octave = 2;
+    p.osc[1].semitone = 24;
+    p.osc[2].octave = -2;
+    p.osc[2].semitone = -24;
+    synth.prepare(48000);
+    synth.setPatch(p);
+    std::array<Event, Synth::polyphony> chord {};
+    for (int i = 0; i < Synth::polyphony; ++i)
+        chord[i].note = i * 8;
+    Block stack(synth, 4096);
+    synth.render(stack.left.data(), stack.right.data(), 4096, chord.data(), chord.size());
+    const float left = peak(stack.left), right = peak(stack.right);
+    check(synth.activeVoices() == Synth::polyphony && left > 0.02f && left < 1.0f && right > 0.02f && right < 1.0f,
+          "Plucked strings failed under full polyphony and unison");
 }
 
 void monoPlaying(const WaveBank& bank)
@@ -613,12 +733,15 @@ void patches()
     const auto decoded = decodePatch(encoded);
     check(decoded && encodePatch(*decoded) == encoded, "Custom patch failed round-trip");
     check(!decodePatch(encoded.substr(0, encoded.size() / 2)), "Truncated patch was accepted");
-    check(!decodePatch("MOT11 9" + encoded.substr(7)), "Unknown patch version was accepted");
+    check(!decodePatch("MOT11 10" + encoded.substr(7)), "Unknown patch version was accepted");
     check(!decodePatch(encoded + "junk"), "Unexpected trailing content was accepted");
     const auto voicing = encoded.find("VOICING ");
     const auto routes = encoded.find("ROUTES ", voicing);
     const auto tape = encoded.find("TAPE_DELAY ", routes);
     const auto arp = encoded.find("ARP ", tape);
+    const auto modes = encoded.find("OSC_MODES ", arp);
+    const auto legacy8 = decodePatch("MOT11 8" + encoded.substr(7, modes - 7));
+    check(legacy8 && encodePatch(*legacy8) == encoded, "Version 8 patch did not load with waveform defaults");
     const auto legacy7 = decodePatch("MOT11 7" + encoded.substr(7, arp - 7));
     check(legacy7 && encodePatch(*legacy7) == encoded, "Version 7 patch did not load with arp defaults");
     auto withArp = custom;
@@ -626,9 +749,24 @@ void patches()
     const auto encodedArp = encodePatch(withArp);
     const auto decodedArp = decodePatch(encodedArp);
     check(decodedArp && encodePatch(*decodedArp) == encodedArp, "Arp settings failed round-trip");
-    check(!decodePatch(encoded.substr(0, arp)), "Missing arp settings were accepted in a version 8 patch");
+    const auto legacy8Prefix = "MOT11 8" + encoded.substr(7, arp - 7);
+    check(!decodePatch(legacy8Prefix), "Missing arp settings were accepted in a version 8 patch");
     for (const auto* invalid : { "ARP 2 120 0\n", "ARP 1 39 0\n", "ARP 1 241 0\n", "ARP 1 120 3\n" })
-        check(!decodePatch(encoded.substr(0, arp) + invalid), "Invalid arp settings were accepted");
+        check(!decodePatch(legacy8Prefix + invalid), "Invalid arp settings were accepted");
+    check(!decodePatch(encoded.substr(0, modes)), "Version 9 patch accepted missing oscillator modes");
+    for (const auto* invalid : { "OSC_MODES 2 .5 .8 0 .5 .8 0 .5 .8\n", "OSC_MODES 1 1.1 .8 0 .5 .8 0 .5 .8\n",
+                                "OSC_MODES 1 .5 .1 0 .5 .8 0 .5 .8\n", "OSC_MODES 1 .5 .8 0 .5 .8\n" })
+        check(!decodePatch(encoded.substr(0, modes) + invalid), "Malformed oscillator modes were accepted");
+    auto mixed = custom;
+    mixed.sound.osc[0].mode = OscillatorMode::pluckedString;
+    mixed.sound.osc[0].brightness = 0.91f;
+    mixed.sound.osc[0].stringDecay = minStringDecay;
+    mixed.sound.osc[1].brightness = 0.37f;
+    mixed.sound.osc[2].mode = OscillatorMode::pluckedString;
+    mixed.sound.osc[2].stringDecay = maxStringDecay;
+    const auto encodedMixed = encodePatch(mixed);
+    const auto decodedMixed = decodePatch(encodedMixed);
+    check(decodedMixed && encodePatch(*decodedMixed) == encodedMixed, "Mixed oscillator modes failed round-trip");
     const auto third = encoded.find("OSC_C "), filter = encoded.find("FILTER ");
     const auto oldMatrix = [&](const auto& targets)
     {
@@ -717,6 +855,7 @@ int main()
         modulationAndPolyphony(bank);
         assignableMatrix(bank);
         analogOscillators(bank);
+        pluckedStrings(bank);
         monoPlaying(bank);
         glideAndUnison(bank);
         effects(bank);
