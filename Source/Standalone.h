@@ -11,7 +11,7 @@
 
 namespace mot
 {
-enum class PanelTheme { classic, classicDark, midnight };
+enum class PanelTheme { classic, classicDark, midnight, porcelain };
 
 class Standalone final : public juce::AudioIODeviceCallback, private juce::Timer,
                          private juce::ChangeListener
@@ -76,6 +76,7 @@ private:
     NamedPatch current = factoryPresets().front();
     PatchMailbox patches;
     bool sessionDirty = false;
+    bool preserveUnreadablePatch = false;
     juce::String audioError;
 
     std::vector<std::unique_ptr<Input>> inputs;

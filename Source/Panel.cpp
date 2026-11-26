@@ -21,7 +21,7 @@ struct PanelPalette
 {
     struct { Colour body, rim, edge, plate, highlight; } enclosure;
     struct { Colour ink, quiet, cool, warm; } legend;
-    struct { Colour bezel, edge, glass, scanline, phosphor; } display;
+    struct { Colour bezel, edge, glass, scanline, phosphor, grid {}, readout {}; } display;
     struct { Colour face, base, shade, rim, pointer, warm, cool, accentPointer, track, fill; } control;
     struct { Colour panel, header, active, panic, activeText; } button;
     struct { Colour shell, edge, ink, quiet, meter, clip, unlit; } header;
@@ -64,11 +64,26 @@ const PanelPalette midnightPalette {
     { Colour(0xffeee4cf), Colour(0xffa59b88), Colour(0xff23221f), Colour(0xff0c0b0a), Colour(0xff4c4235), Colour(0xff392317) }
 };
 
+const PanelPalette porcelainPalette {
+    { Colour(0xffeceae6), Colour(0xffd4d4cf), Colour(0xffc2c2bc), Colour(0xfff0efec), Colour(0xfffcfbf8) },
+    { Colour(0xff303433), Colour(0xff565d5a), Colour(0xff465653), Colour(0xff9c3b31) },
+    { Colour(0xff363a38), Colour(0xff666b65), Colour(0xff202423), {}, Colour(0xfff0ac48),
+      Colour(0x14c6cec8), Colour(0xffd5dad3) },
+    { Colour(0xfff8f8f5), Colour(0xff888d88), Colour(0xffe5e6e1), Colour(0xffd4d6cf), Colour(0xffb6650d),
+      Colour(0xffb6650d), Colour(0xff465653), Colour(0xffb6650d), Colour(0xff606762), Colour(0xffb6650d) },
+    { Colour(0xfff8f8f4), Colour(0xfff8f8f4), Colour(0xffe6e2da), Colour(0xfff7ede8), Colour(0xff303433) },
+    { Colour(0xfff0efec), Colour(0xffc2c2bc), Colour(0xff303433), Colour(0xff565d5a),
+      Colour(0xfff0ac48), Colour(0xfffa8269), Colour(0xff3d4440) },
+    { Colour(0xfff8f8f4), Colour(0xffb4b7b0), Colour(0xff383d3a), Colour(0xff242826),
+      Colour(0xff565d5a), Colour(0xff472e16) }
+};
+
 struct ThemeOption { PanelTheme theme; const char* label; };
 constexpr ThemeOption themeOptions[] {
     { PanelTheme::classic, "Classic" },
     { PanelTheme::classicDark, "Classic Dark" },
-    { PanelTheme::midnight, "Midnight" }
+    { PanelTheme::midnight, "Midnight" },
+    { PanelTheme::porcelain, "Porcelain" }
 };
 
 constexpr float displayTextScale = 1.3f;
@@ -151,6 +166,12 @@ void drawControlShadow(Graphics& g, Rectangle<float> bounds, float cornerRadius,
     juce::DropShadow(colour, 2, { 1, 2 }).drawForPath(g, silhouette);
 }
 
+Colour displayInk(const PanelPalette& palette)
+{
+    const auto& display = palette.display;
+    return display.readout.isTransparent() ? display.phosphor : display.readout;
+}
+
 void display(Graphics& g, Rectangle<int> bounds, const PanelPalette& palette)
 {
     const auto& colours = palette.display;
@@ -168,6 +189,24 @@ void display(Graphics& g, Rectangle<int> bounds, const PanelPalette& palette)
     g.drawRoundedRectangle(lip, 3.85f, 1.0f);
     g.setColour(colours.glass);
     g.fillRoundedRectangle(glass, 3.0f);
+    if (!colours.grid.isTransparent())
+    {
+        const auto grid = inner.reduced(2).toFloat();
+        juce::Path lines;
+        for (float x = grid.getX() + 4.0f; x < grid.getRight(); x += 7.0f)
+        {
+            lines.startNewSubPath(x, grid.getY());
+            lines.lineTo(x, grid.getBottom());
+        }
+        for (float y = grid.getY() + 4.0f; y < grid.getBottom(); y += 7.0f)
+        {
+            lines.startNewSubPath(grid.getX(), y);
+            lines.lineTo(grid.getRight(), y);
+        }
+        g.setColour(colours.grid);
+        g.strokePath(lines, juce::PathStrokeType(0.6f));
+        return;
+    }
     g.setColour(colours.scanline);
     for (int y = inner.getY() + 3; y < inner.getBottom() - 2; y += 3)
         g.drawHorizontalLine(y, static_cast<float>(inner.getX() + 1), static_cast<float>(inner.getRight() - 1));
@@ -259,8 +298,8 @@ public:
         theme = next;
         const auto& c = palette();
         using UI = ColourScheme::UIColour;
-        auto scheme = getDarkColourScheme();
-        if (isDark())
+        auto scheme = isPorcelain() ? getLightColourScheme() : getDarkColourScheme();
+        if (hasThemedMenus())
         {
             scheme.setUIColour(UI::menuBackground, c.header.shell);
             scheme.setUIColour(UI::menuText, c.header.ink);
@@ -271,14 +310,17 @@ public:
     }
 
     PanelTheme getTheme() const { return theme; }
-    bool isDark() const { return theme != PanelTheme::classic; }
+    bool isDark() const { return theme == PanelTheme::classicDark || isMidnight(); }
     bool isMidnight() const { return theme == PanelTheme::midnight; }
+    bool isPorcelain() const { return theme == PanelTheme::porcelain; }
+    bool hasThemedMenus() const { return isDark() || isPorcelain(); }
     const PanelPalette& palette() const
     {
         switch (theme)
         {
             case PanelTheme::classicDark: return classicDarkPalette;
             case PanelTheme::midnight: return midnightPalette;
+            case PanelTheme::porcelain: return porcelainPalette;
             case PanelTheme::classic: return classicPalette;
         }
         return classicPalette;
@@ -294,6 +336,12 @@ public:
         const float diameter = static_cast<float>(std::min(w, h)) - 15.0f;
         const juce::Point<float> centre { x + w * 0.5f, y + h * 0.5f };
         const auto bounds = Rectangle<float>(diameter, diameter).withCentre(centre);
+        const float angle = start + position * (end - start);
+        if (isPorcelain())
+        {
+            drawPorcelainKnob(g, bounds, angle, slider);
+            return;
+        }
         const auto cap = hardware ? bounds.reduced(diameter * 0.096f).translated(0.0f, -0.6f) : bounds;
         const bool customFace = slider.isColourSpecified(juce::Slider::thumbColourId);
         const auto face = customFace ? slider.findColour(juce::Slider::thumbColourId) : c.control.face;
@@ -344,7 +392,6 @@ public:
             g.setColour(c.legend.cool);
             g.drawEllipse(bounds, focused ? 1.55f : 0.9f);
         }
-        const float angle = start + position * (end - start);
         const auto indicator = customFace ? c.control.accentPointer : c.control.pointer;
         g.setColour(slider.isEnabled() ? indicator : c.legend.quiet.withAlpha(0.48f));
         g.drawLine({ radialPoint(angle, diameter * (hardware ? 0.19f : 0.14f)),
@@ -368,7 +415,12 @@ public:
         }
         g.setColour(c.control.track);
         g.fillRoundedRectangle(track, 3.0f);
-        if (isMidnight())
+        if (isPorcelain())
+        {
+            setRimLighting(g, track, c.control.base, c.control.track, c.enclosure.highlight);
+            g.drawRoundedRectangle(track.expanded(0.6f), 3.5f, 1.0f);
+        }
+        else if (isMidnight())
         {
             g.setColour(c.enclosure.edge);
             g.drawRoundedRectangle(track.expanded(0.55f), 3.5f, 0.8f);
@@ -424,6 +476,34 @@ public:
         const auto offColour = button.findColour(juce::TextButton::buttonColourId);
         const auto face = area.translated(0.0f, pressed ? 1.4f : 0.0f);
         const auto base = lit ? colour : offColour;
+        if (isPorcelain())
+        {
+            const auto top = enabled && highlighted ? base.brighter(0.12f) : base;
+            const auto bottom = top.darker(pressed ? 0.10f : 0.045f);
+            const auto lowerEdge = face.translated(0.0f, pressed ? 0.65f : 1.6f);
+            drawControlShadow(g, lowerEdge, radius, c.control.base.withAlpha(opacity * (pressed ? 0.22f : 0.47f)));
+            g.setColour(c.control.base.withAlpha(0.74f * opacity));
+            g.fillRoundedRectangle(lowerEdge, radius);
+            g.setGradientFill(panelLightGradient(face, top.withAlpha(opacity), bottom.withAlpha(opacity)));
+            g.fillRoundedRectangle(face, radius);
+            setRimLighting(g, face, juce::Colours::white.withAlpha(opacity),
+                           c.enclosure.rim.withAlpha(opacity), c.control.base.withAlpha(0.55f * opacity));
+            g.drawRoundedRectangle(face.reduced(0.5f), radius, 0.8f);
+            if (lit)
+            {
+                const auto led = Rectangle<float>(5.0f, 2.4f).withCentre({ area.getCentreX(), area.getBottom() + 1.3f });
+                g.setColour(c.control.pointer);
+                g.fillRoundedRectangle(led.expanded(0.65f), 1.5f);
+                g.setColour(phosphor);
+                g.fillRoundedRectangle(led, 1.2f);
+            }
+            if (focused)
+            {
+                g.setColour(c.legend.cool);
+                g.drawRoundedRectangle(face.reduced(0.6f), radius, 1.25f);
+            }
+            return;
+        }
         const auto fill = pressed ? base.interpolatedWith(phosphor, 0.22f).darker(0.10f)
                                   : enabled && highlighted ? base.brighter(0.10f) : base;
 
@@ -464,6 +544,41 @@ public:
     }
 
 private:
+    void drawPorcelainKnob(Graphics& g, Rectangle<float> bounds, float angle, juce::Slider& slider) const
+    {
+        const auto& c = palette();
+        const auto diameter = bounds.getWidth();
+        const auto centre = bounds.getCentre();
+        const auto recess = bounds.expanded(2.5f);
+        g.setGradientFill(panelLightGradient(recess, c.enclosure.edge, c.enclosure.highlight));
+        g.fillEllipse(recess);
+        drawControlShadow(g, bounds, diameter * 0.5f, c.control.base.withAlpha(0.62f));
+
+        const auto collar = bounds.translated(0.0f, 1.3f);
+        g.setGradientFill(panelLightGradient(collar, c.control.rim, c.control.base.darker(0.2f)));
+        g.fillEllipse(collar);
+        const auto cap = bounds.reduced(diameter * 0.095f).translated(0.0f, -1.2f);
+        const bool enabled = slider.isEnabled();
+        const auto face = enabled ? c.control.face : c.control.shade;
+        g.setGradientFill(panelLightGradient(cap, face.brighter(0.14f), face.darker(0.055f)));
+        g.fillEllipse(cap);
+        setRimLighting(g, cap, face.brighter(0.22f), c.control.rim, c.control.base);
+        g.drawEllipse(cap.reduced(0.5f), 0.9f);
+
+        const bool focused = enabled && slider.hasKeyboardFocus(true);
+        if (focused || (enabled && slider.isMouseOverOrDragging()))
+        {
+            g.setColour(c.legend.cool);
+            g.drawEllipse(recess, focused ? 1.55f : 0.85f);
+        }
+        const float width = juce::jlimit(1.65f, 3.6f, diameter * 0.049f);
+        juce::Path marker;
+        marker.addRoundedRectangle(centre.x - width * 0.5f, centre.y - diameter * 0.33f,
+                                   width, diameter * 0.16f, width * 0.5f);
+        g.setColour(enabled ? c.control.pointer : c.legend.quiet.withAlpha(0.55f));
+        g.fillPath(marker, juce::AffineTransform::rotation(angle, centre.x, centre.y));
+    }
+
     PanelTheme theme = PanelTheme::classic;
 };
 
@@ -566,11 +681,11 @@ private:
     {
         const auto& palette = skin.palette();
         display(g, getLocalBounds(), palette);
-        const auto phosphor = palette.display.phosphor;
+        const auto ink = displayInk(palette);
         if (rows.empty())
         {
-            centredPixels(g, "NO ROUTES", getWidth() / 2, getHeight() / 2 - 8, phosphor);
-            centredPixels(g, "USE ADD ROUTE", getWidth() / 2, getHeight() / 2 + 8, phosphor.withAlpha(0.65f));
+            centredPixels(g, "NO ROUTES", getWidth() / 2, getHeight() / 2 - 8, ink);
+            centredPixels(g, "USE ADD ROUTE", getWidth() / 2, getHeight() / 2 + 8, ink.withAlpha(0.65f));
         }
     }
 
@@ -588,15 +703,17 @@ private:
         if (!juce::isPositiveAndBelow(index, getNumRows())) return;
         const auto& [route, amount] = rows[index];
         const int divider = width * 2 / 3;
-        const auto phosphor = skin.palette().display.phosphor;
-        const auto colour = selected ? phosphor.brighter(0.12f) : phosphor;
+        const auto& palette = skin.palette();
+        const auto phosphor = palette.display.phosphor;
+        const auto ink = displayInk(palette);
+        const auto colour = selected ? ink.brighter(0.12f) : ink;
         if (selected)
         {
             g.fillAll(phosphor.withAlpha(0.12f));
-            g.setColour(colour);
+            g.setColour(phosphor.brighter(0.12f));
             g.fillRect(1, 1, 3, height - 2);
         }
-        g.setColour(phosphor.withAlpha(0.54f));
+        g.setColour(ink.withAlpha(skin.isPorcelain() ? 0.28f : 0.54f));
         g.drawRect(0, 0, width, height, 1);
         g.drawVerticalLine(divider, 0.0f, static_cast<float>(height));
 
@@ -758,7 +875,7 @@ private:
         g.fillRoundedRectangle(area, 3.0f);
         const auto face = area.withTrimmedBottom(black ? 4.0f : 3.0f);
         const auto keyColour = down ? c.display.phosphor : black ? c.keys.black : c.keys.white;
-        if (skin.isMidnight())
+        if (skin.isMidnight() || skin.isPorcelain())
             g.setGradientFill(panelLightGradient(face, keyColour.brighter(black ? 0.28f : 0.12f),
                                                  keyColour.darker(black ? 0.23f : 0.07f)));
         else
@@ -829,6 +946,26 @@ public:
         const auto& c = skin.palette();
         auto face = bounds;
         g.fillAll(c.enclosure.body);
+        if (skin.isPorcelain())
+        {
+            const auto caseRim = faceplateBounds().toFloat().reduced(1.5f);
+            g.setGradientFill(panelLightGradient(caseRim, c.enclosure.rim, c.enclosure.edge));
+            g.fillRoundedRectangle(caseRim, 17.0f);
+            g.setColour(c.enclosure.highlight.withAlpha(0.92f));
+            g.drawRoundedRectangle(caseRim.reduced(0.5f), 16.5f, 1.0f);
+
+            const auto plate = caseRim.reduced(6.0f);
+            g.setGradientFill(panelLightGradient(plate, c.enclosure.highlight, c.enclosure.plate));
+            g.fillRoundedRectangle(plate, 11.0f);
+            setRimLighting(g, plate, c.enclosure.edge, c.enclosure.rim, c.enclosure.highlight);
+            g.drawRoundedRectangle(plate.reduced(0.5f), 10.5f, 1.0f);
+            const auto seam = plate.reduced(6.0f, 0.0f);
+            g.setColour(c.header.edge);
+            g.drawHorizontalLine(104, seam.getX(), seam.getRight());
+            g.setColour(c.enclosure.highlight);
+            g.drawHorizontalLine(105, seam.getX(), seam.getRight());
+            return;
+        }
         if (hasWoodCheeks())
         {
             drawWoodCheek(g, face.removeFromLeft(woodCheekWidth), false);
@@ -975,10 +1112,12 @@ private:
                             : style == ButtonStyle::header ? c.button.header : c.button.panel;
             control->setColour(juce::TextButton::buttonColourId, face);
             control->setColour(juce::TextButton::buttonOnColourId,
-                               style == ButtonStyle::display ? face : c.display.phosphor);
-            control->setColour(juce::TextButton::textColourOffId,
-                               style == ButtonStyle::panel ? c.legend.ink : c.header.ink);
-            control->setColour(juce::TextButton::textColourOnId, c.display.glass);
+                               style == ButtonStyle::display ? face
+                                   : skin.isPorcelain() ? c.button.active : c.display.phosphor);
+            const auto ink = style == ButtonStyle::panel ? c.legend.ink
+                           : style == ButtonStyle::panic && skin.isPorcelain() ? c.legend.warm : c.header.ink;
+            control->setColour(juce::TextButton::textColourOffId, ink);
+            control->setColour(juce::TextButton::textColourOnId, skin.isPorcelain() ? c.button.activeText : c.display.glass);
         }
         for (auto& row : oscillatorKnobs)
             row[volumeColumn]->setColour(juce::Slider::thumbColourId, c.control.warm);
@@ -1509,7 +1648,7 @@ private:
         syncControls();
         const auto current = audio.patch().sound.osc[row].table;
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.hasThemedMenus()) menu.setLookAndFeel(&skin);
         menu.addSectionHeader("Classic analog");
         for (int table = sineTable; table < tableCount; ++table)
             menu.addItem(table + 1, tableNames[table], true, table == current);
@@ -1543,7 +1682,7 @@ private:
     {
         keys.release();
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.hasThemedMenus()) menu.setLookAndFeel(&skin);
         for (int i = 0; i < presetCount; ++i)
             menu.addItem(i + 1, String(i + 1).paddedLeft('0', 2) + "   " + String(factoryPresets()[i].name),
                          true, i == presetSlot && !edited);
@@ -1602,7 +1741,7 @@ private:
         keys.release();
         auto outputs = audio.outputs();
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.hasThemedMenus()) menu.setLookAndFeel(&skin);
         menu.addSectionHeader("Audio output");
         if (outputs.empty()) menu.addItem(-1, "No devices available", false);
         String lastType;
@@ -1685,8 +1824,16 @@ private:
     {
         const auto& c = skin.palette();
         const auto phosphor = c.display.phosphor;
+        const auto ink = displayInk(c);
         const bool hardware = skin.isMidnight();
-        if (hardware)
+        const bool porcelain = skin.isPorcelain();
+        if (porcelain)
+        {
+            g.setColour(c.display.glass);
+            g.fillRoundedRectangle({ 41, 39, 41, 39 }, 4.0f);
+            g.setColour(phosphor);
+        }
+        else if (hardware)
         {
             g.setColour(c.legend.cool);
             g.drawRect(41, 39, 41, 39, 1);
@@ -1708,15 +1855,16 @@ private:
 
         display(g, patchDisplay, c);
         const auto id = presetSlot < 0 ? String("USER") : String(presetSlot + 1).paddedLeft('0', 2) + "  FACTORY";
-        pixels(g, id + (edited ? "  / EDIT" : ""), 505, 43, 1, phosphor.withAlpha(0.68f));
-        pixels(g, String::fromUTF8(audio.patch().name.c_str()).substring(0, 21), 505, 58, 2, phosphor);
+        pixels(g, id + (edited ? "  / EDIT" : ""), 505, 43, 1, ink.withAlpha(0.68f));
+        pixels(g, String::fromUTF8(audio.patch().name.c_str()).substring(0, 21), 505, 58, 2, ink);
         if (!keys.isVisible() && juce::Time::getMillisecondCounterHiRes() < messageEnd)
-            label(g, message, headerNotice, 12.5f, messageIsError ? c.header.clip : c.header.ink);
+            label(g, message, headerNotice, 12.5f,
+                  messageIsError ? (porcelain ? c.legend.warm : c.header.clip) : c.header.ink);
 
-        if (hardware)
+        if (hardware || porcelain)
         {
             display(g, { 1092, 35, 164, 48 }, c);
-            pixels(g, "OUT", 1102, 44, 1, phosphor.withAlpha(0.75f));
+            pixels(g, "OUT", 1102, 44, 1, ink.withAlpha(0.75f));
         }
         else
             label(g, "OUT", { 1101, 39, 54, 19 }, 12.0f, c.header.ink, juce::Justification::centredLeft, true);
@@ -1728,9 +1876,21 @@ private:
             const auto colour = hardware ? phosphor.withAlpha(lit ? (i >= 11 ? 1.0f : 0.8f) : 0.15f)
                                          : lit ? (i >= 11 ? c.header.clip : c.header.meter) : c.header.unlit;
             g.setColour(colour);
-            const int x = 1102 + (hardware ? 11 : 12) * i;
+            const int x = 1102 + (hardware || porcelain ? 11 : 12) * i;
             const Rectangle<float> led { static_cast<float>(x), 61.0f, hardware ? 8.5f : 9.0f, 9.0f };
-            g.fillRoundedRectangle(led, hardware ? 0.75f : 1.5f);
+            if (porcelain)
+            {
+                const auto dot = led.reduced(1.6f);
+                if (lit)
+                {
+                    g.setColour(colour.withAlpha(0.25f));
+                    g.fillEllipse(dot.expanded(1.4f));
+                    g.setColour(colour);
+                }
+                g.fillEllipse(dot);
+            }
+            else
+                g.fillRoundedRectangle(led, hardware ? 0.75f : 1.5f);
         }
     }
 
@@ -1748,7 +1908,7 @@ private:
         for (int row = 0; row < oscillatorCount; ++row)
         {
             const auto area = oscillatorDisplay(row);
-            g.setColour(skin.isMidnight() ? c.enclosure.edge : c.legend.quiet.withAlpha(0.65f));
+            g.setColour(skin.isMidnight() || skin.isPorcelain() ? c.enclosure.edge : c.legend.quiet.withAlpha(0.65f));
             g.drawHorizontalLine(oscillatorKnob(row, positionColumn).getCentreY(), static_cast<float>(area.getRight()),
                                  static_cast<float>(oscillatorColumnX(volumeColumn)));
             paintWavetable(g, row, area);
@@ -1780,13 +1940,14 @@ private:
     {
         const auto& palette = skin.palette();
         const auto phosphor = palette.display.phosphor;
+        const auto ink = displayInk(palette);
         display(g, area, palette);
         const auto& osc = audio.patch().sound.osc[row];
         const auto x = static_cast<float>(area.getX() + 11), end = static_cast<float>(area.getRight() - 11);
         const auto top = static_cast<float>(area.getY());
-        pixels(g, "OSC " + String(oscillatorNames[row]), x, top + 11, 1, phosphor.withAlpha(row == engine ? 1.0f : 0.65f));
-        pixels(g, tableNames[osc.table], x, top + 26, displayTextScale, phosphor);
-        g.setColour(phosphor.withAlpha(0.7f));
+        pixels(g, "OSC " + String(oscillatorNames[row]), x, top + 11, 1, ink.withAlpha(row == engine ? 1.0f : 0.65f));
+        pixels(g, tableNames[osc.table], x, top + 26, displayTextScale, ink);
+        g.setColour(ink.withAlpha(0.7f));
         g.drawLine(end - 7, top + 13, end - 3, top + 17, 1.2f);
         g.drawLine(end - 3, top + 17, end + 1, top + 13, 1.2f);
         const auto plot = [&](float frame, float y, float extent, float strength, float stroke)
@@ -1837,8 +1998,9 @@ private:
     void paintPerformance(Graphics& g) const
     {
         const auto& c = skin.palette();
-        const bool hardware = skin.isMidnight();
-        if (hardware)
+        const bool porcelain = skin.isPorcelain();
+        const bool hasDisplay = skin.isMidnight() || porcelain;
+        if (hasDisplay)
         {
             display(g, { 120, 709, 259, 52 }, c);
             const auto keyBed = keys.getBounds().toFloat().expanded(5.0f, 4.0f);
@@ -1852,15 +2014,17 @@ private:
         g.drawVerticalLine(385, 686.0f, 758.0f);
         label(g, "PERFORMANCE", { 128, 687, 244, 20 }, 13.0f, c.legend.ink, juce::Justification::centredLeft, true);
         const auto info = "MIDI " + String(audio.inputCount()) + " IN  /  " + String(audio.voiceCount()).paddedLeft('0', 2) + " VOICES";
-        pixels(g, info, 128, 718, 1, hardware ? c.display.phosphor : c.legend.cool.darker(0.2f));
-        g.setColour(hardware ? c.display.phosphor.withAlpha(audio.hasRecentMidiNote() ? 1.0f : 0.22f)
-                             : audio.hasRecentMidiNote() ? c.legend.warm : c.legend.quiet.withAlpha(0.25f));
+        pixels(g, info, 128, 718, 1, hasDisplay ? displayInk(c) : c.legend.cool.darker(0.2f));
+        g.setColour(hasDisplay ? c.display.phosphor.withAlpha(audio.hasRecentMidiNote() ? 1.0f : 0.22f)
+                               : audio.hasRecentMidiNote() ? c.legend.warm : c.legend.quiet.withAlpha(0.25f));
         g.fillEllipse(134.0f + 6.0f * info.length(), 719.0f, 5.0f, 5.0f);
         const bool showNotice = juce::Time::getMillisecondCounterHiRes() < messageEnd;
         const auto status = showNotice ? message : audio.unavailableInputs() > 0
             ? String(audio.unavailableInputs()) + " MIDI input(s) unavailable" : audio.audioStatus();
-        const auto statusInk = hardware ? c.display.phosphor.withAlpha(showNotice && messageIsError ? 1.0f : 0.76f)
-                                       : showNotice && messageIsError ? c.legend.warm : c.legend.quiet;
+        const auto statusInk = hasDisplay
+            ? (porcelain && showNotice && messageIsError ? c.header.clip
+                                                       : displayInk(c).withAlpha(showNotice && messageIsError ? 1.0f : 0.76f))
+            : showNotice && messageIsError ? c.legend.warm : c.legend.quiet;
         label(g, status, { 128, 736, 247, 19 }, 12.5f, statusInk);
         label(g, "KEY OCT " + String(octave), { 399, 689, 89, 25 }, 12.0f, c.legend.ink,
               juce::Justification::centred, true);

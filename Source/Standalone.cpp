@@ -30,6 +30,7 @@ const char* panelThemeKey(PanelTheme theme)
     {
         case PanelTheme::classicDark: return "classic-dark";
         case PanelTheme::midnight: return "midnight";
+        case PanelTheme::porcelain: return "porcelain";
         case PanelTheme::classic: return "classic";
     }
     return "classic";
@@ -69,8 +70,11 @@ const Patch* Standalone::PatchMailbox::latest() noexcept
 
 Standalone::Standalone() : settings(std::make_unique<juce::PropertiesFile>(settingsOptions()))
 {
-    if (auto loaded = decodePatch(settings->getValue("patch").toStdString()))
+    const auto savedPatch = settings->getValue("patch");
+    if (auto loaded = decodePatch(savedPatch.toStdString()))
         current = std::move(*loaded);
+    else
+        preserveUnreadablePatch = savedPatch.isNotEmpty();
     patches.publish(current.sound);
 
     const auto saved = settings->getXmlValue("audio");
@@ -97,13 +101,14 @@ void Standalone::apply(NamedPatch patch)
 {
     current = std::move(patch);
     patches.publish(current.sound);
+    preserveUnreadablePatch = false;
     sessionDirty = true;
 }
 
 PanelTheme Standalone::panelTheme() const
 {
     const auto stored = settings->getValue("panelTheme");
-    for (const auto theme : { PanelTheme::classicDark, PanelTheme::midnight })
+    for (const auto theme : { PanelTheme::classicDark, PanelTheme::midnight, PanelTheme::porcelain })
         if (stored == panelThemeKey(theme))
             return theme;
     return PanelTheme::classic;
@@ -160,7 +165,8 @@ void Standalone::storeSession()
 {
     if (!sessionDirty)
         return;
-    settings->setValue("patch", juce::String::fromUTF8(encodePatch(current).c_str()));
+    if (!preserveUnreadablePatch)
+        settings->setValue("patch", juce::String::fromUTF8(encodePatch(current).c_str()));
     if (const auto xml = deviceManager.createStateXml())
         settings->setValue("audio", xml.get());
     sessionDirty = false;
