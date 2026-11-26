@@ -31,6 +31,7 @@ const char* panelThemeKey(PanelTheme theme)
         case PanelTheme::classicDark: return "classic-dark";
         case PanelTheme::midnight: return "midnight";
         case PanelTheme::enamel: return "enamel";
+        case PanelTheme::enamelDark: return "enamel-dark";
         case PanelTheme::classic: return "classic";
     }
     return "classic";
@@ -104,7 +105,7 @@ void Standalone::apply(NamedPatch patch)
 PanelTheme Standalone::panelTheme() const
 {
     const auto stored = settings->getValue("panelTheme");
-    for (const auto theme : { PanelTheme::classicDark, PanelTheme::midnight, PanelTheme::enamel })
+    for (const auto theme : { PanelTheme::classicDark, PanelTheme::midnight, PanelTheme::enamel, PanelTheme::enamelDark })
         if (stored == panelThemeKey(theme))
             return theme;
     return PanelTheme::classic;

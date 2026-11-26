@@ -76,12 +76,33 @@ const PanelPalette enamelPalette {
     { Colour(0xffeeebe0), Colour(0xff94938a), Colour(0xff292d2d), Colour(0xff161a19), Colour(0xff414844), Colour(0xff1b2719) }
 };
 
+const PanelPalette enamelDarkPalette {
+    { Colour(0xff141719), Colour(0xffc5cece), Colour(0xff77827e), Colour(0xff2b3032), Colour(0xff3c4446) },
+    { Colour(0xfff2eee4), Colour(0xffc4c7bc), Colour(0xffd6e2c8), Colour(0xffffaa96) },
+    enamelPalette.display,
+    { Colour(0xffd6d2c8), Colour(0xff171b1c), Colour(0xff9e9f96), Colour(0xff606e70), Colour(0xff131617),
+      Colour(0xffe88965), Colour(0xff82c1c8), Colour(0xff131617), Colour(0xff171c1d), Colour(0xff848e66) },
+    { Colour(0xff32383a), Colour(0xff3b4245), Colour(0xff354729), Colour(0xff763d35), Colour(0xffeff8de) },
+    { Colour(0xff292f32), Colour(0xff596367), Colour(0xfff2eee4), Colour(0xffc4c7bc),
+      Colour(0xffa6df69), Colour(0xfff37458), Colour(0xff303c30) },
+    { Colour(0xffbfc3ba), Colour(0xff717972), Colour(0xff262d2f), Colour(0xff101415), Colour(0xff323a36), Colour(0xff1b2719) }
+};
+
+struct EnamelPlates { Colour olive, blue, ochre, grey, redOrange; };
+const EnamelPlates enamelPlates {
+    Colour(0xff919e55), Colour(0xff7bb5c1), Colour(0xffdeb35e), Colour(0xffc6c5be), Colour(0xffda805d)
+};
+const EnamelPlates enamelDarkPlates {
+    Colour(0xff404b2c), Colour(0xff294c56), Colour(0xff574322), Colour(0xff383d40), Colour(0xff603a32)
+};
+
 struct ThemeOption { PanelTheme theme; const char* label; };
 constexpr ThemeOption themeOptions[] {
     { PanelTheme::classic, "Classic" },
     { PanelTheme::classicDark, "Classic Dark" },
     { PanelTheme::midnight, "Midnight" },
-    { PanelTheme::enamel, "Enamel" }
+    { PanelTheme::enamel, "Enamel" },
+    { PanelTheme::enamelDark, "Enamel Dark" }
 };
 
 constexpr float displayTextScale = 1.3f;
@@ -355,7 +376,7 @@ public:
     bool hasThemedMenus() const { return theme != PanelTheme::classic; }
     bool hasWoodCheeks() const { return theme == PanelTheme::classicDark || isMidnight(); }
     bool isMidnight() const { return theme == PanelTheme::midnight; }
-    bool isEnamel() const { return theme == PanelTheme::enamel; }
+    bool isEnamel() const { return theme == PanelTheme::enamel || theme == PanelTheme::enamelDark; }
     const PanelPalette& palette() const
     {
         switch (theme)
@@ -363,6 +384,7 @@ public:
             case PanelTheme::classicDark: return classicDarkPalette;
             case PanelTheme::midnight: return midnightPalette;
             case PanelTheme::enamel: return enamelPalette;
+            case PanelTheme::enamelDark: return enamelDarkPalette;
             case PanelTheme::classic: return classicPalette;
         }
         return classicPalette;
@@ -576,18 +598,19 @@ public:
     }
 
 private:
-    static void drawEnamelFocus(Graphics& g, Rectangle<float> bounds, float radius)
+    void drawEnamelFocus(Graphics& g, Rectangle<float> bounds, float radius) const
     {
-        g.setColour(enamelPalette.control.base);
+        const auto& c = palette();
+        g.setColour(c.control.base);
         g.drawRoundedRectangle(bounds, radius, 2.4f);
-        g.setColour(enamelPalette.enclosure.rim);
+        g.setColour(c.enclosure.rim);
         g.drawRoundedRectangle(bounds, radius, 1.0f);
     }
 
-    static void drawEnamelKnob(Graphics& g, Rectangle<float> bounds, float start, float end,
-                                float position, const juce::Slider& slider)
+    void drawEnamelKnob(Graphics& g, Rectangle<float> bounds, float start, float end,
+                        float position, const juce::Slider& slider) const
     {
-        const auto& c = enamelPalette;
+        const auto& c = palette();
         const auto centre = bounds.getCentre();
         const auto radius = bounds.getWidth() * 0.5f;
         const bool enabled = slider.isEnabled();
@@ -633,10 +656,10 @@ private:
         }
     }
 
-    static void drawEnamelButton(Graphics& g, const juce::Button& button, Colour colour, Rectangle<float> area,
-                                  bool highlighted, bool down)
+    void drawEnamelButton(Graphics& g, const juce::Button& button, Colour colour, Rectangle<float> area,
+                          bool highlighted, bool down) const
     {
-        const auto& c = enamelPalette;
+        const auto& c = palette();
         const bool enabled = button.isEnabled();
         const bool pressed = enabled && down;
         const bool active = enabled && button.getToggleState();
@@ -645,7 +668,8 @@ private:
         g.setGradientFill(panelLightGradient(area, c.control.rim, c.control.base.darker(0.50f)));
         g.fillRoundedRectangle(area, radius);
         auto cap = area.reduced(2.2f, 2.0f).withTrimmedBottom(1.0f).translated(0.0f, pressed ? 1.0f : 0.0f);
-        const auto tone = !enabled ? button.findColour(juce::TextButton::buttonColourId).interpolatedWith(c.control.shade, 0.55f)
+        const auto disabledShade = theme == PanelTheme::enamelDark ? c.control.base : c.control.shade;
+        const auto tone = !enabled ? button.findColour(juce::TextButton::buttonColourId).interpolatedWith(disabledShade, 0.55f)
                         : pressed ? colour.darker(0.20f) : highlighted ? colour.brighter(0.16f) : colour;
         g.setGradientFill(panelLightGradient(cap, tone.brighter(0.14f), tone.darker(0.12f)));
         g.fillRoundedRectangle(cap, 1.0f);
@@ -1978,8 +2002,8 @@ private:
         drawEnamelPlate(g, edge.withBottom(upperTop - gap), c.header.shell);
         drawEnamelPlate(g, edge.withTop(lowerBottom + gap), c.enclosure.plate);
 
-        const Colour olive(0xff919e55), blue(0xff7bb5c1), ochre(0xffdeb35e);
-        const Colour grey(0xffc6c5be), redOrange(0xffda805d);
+        const auto& [olive, blue, ochre, grey, redOrange] = skin.getTheme() == PanelTheme::enamelDark
+            ? enamelDarkPlates : enamelPlates;
         for (const auto& [area, tone] : { std::pair { oscPanel, olive }, std::pair { filterPanel, blue },
                                         std::pair { envPanel, ochre }, std::pair { lfoPanel, blue },
                                         std::pair { matrixPanel, grey }, std::pair { voicingPanel, grey },
