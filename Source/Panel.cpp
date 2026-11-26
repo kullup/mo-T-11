@@ -21,7 +21,7 @@ struct PanelPalette
 {
     struct { Colour body, rim, edge, plate, highlight; } enclosure;
     struct { Colour ink, quiet, cool, warm; } legend;
-    struct { Colour bezel, edge, glass, scanline, phosphor; } display;
+    struct { Colour bezel, edge, glass, scanline, phosphor; bool shaded = false; } display;
     struct { Colour face, base, shade, rim, pointer, warm, cool, accentPointer, track, fill; } control;
     struct { Colour panel, header, active, panic, activeText; } button;
     struct { Colour shell, edge, ink, quiet, meter, clip, unlit; } header;
@@ -64,11 +64,24 @@ const PanelPalette midnightPalette {
     { Colour(0xffeee4cf), Colour(0xffa59b88), Colour(0xff23221f), Colour(0xff0c0b0a), Colour(0xff4c4235), Colour(0xff392317) }
 };
 
+const PanelPalette enamelPalette {
+    { Colour(0xff131617), Colour(0xffefede5), Colour(0xff414844), Colour(0xffc6c2b8), Colour(0xffddd8cd) },
+    { Colour(0xff161b18), Colour(0xff333a33), Colour(0xff29382c), Colour(0xff783329) },
+    { Colour(0xff171a19), Colour(0xff424946), Colour(0xff0c1410), Colour(0x0c9abf88), Colour(0xffb5eb77), true },
+    { Colour(0xffd6d2c8), Colour(0xff171b1c), Colour(0xff9e9f96), Colour(0xff4a5152), Colour(0xff131617),
+      Colour(0xffc96a48), Colour(0xff71aeb4), Colour(0xff131617), Colour(0xff1c2323), Colour(0xff848e66) },
+    { Colour(0xffe7e3d9), Colour(0xffe7e3d9), Colour(0xff303c20), Colour(0xffe29a7f), Colour(0xffeff8de) },
+    { Colour(0xffc6c2b8), Colour(0xff494b44), Colour(0xff161b18), Colour(0xff333a33),
+      Colour(0xffa6df69), Colour(0xfff37458), Colour(0xff303c30) },
+    { Colour(0xffeeebe0), Colour(0xff94938a), Colour(0xff292d2d), Colour(0xff161a19), Colour(0xff414844), Colour(0xff1b2719) }
+};
+
 struct ThemeOption { PanelTheme theme; const char* label; };
 constexpr ThemeOption themeOptions[] {
     { PanelTheme::classic, "Classic" },
     { PanelTheme::classicDark, "Classic Dark" },
-    { PanelTheme::midnight, "Midnight" }
+    { PanelTheme::midnight, "Midnight" },
+    { PanelTheme::enamel, "Enamel" }
 };
 
 constexpr float displayTextScale = 1.3f;
@@ -151,6 +164,70 @@ void drawControlShadow(Graphics& g, Rectangle<float> bounds, float cornerRadius,
     juce::DropShadow(colour, 2, { 1, 2 }).drawForPath(g, silhouette);
 }
 
+const juce::Image& enamelGrain()
+{
+    static const auto grain = []
+    {
+        constexpr int size = 160;
+        juce::Image image(juce::Image::ARGB, size, size, false);
+        juce::Random random(311);
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+            {
+                const int fleck = random.nextInt(29) - 14;
+                const auto tone = fleck < 0 ? juce::Colours::black : juce::Colours::white;
+                image.setPixelAt(x, y, tone.withAlpha(static_cast<juce::uint8>(std::abs(fleck))));
+            }
+        return image;
+    }();
+    return grain;
+}
+
+const juce::Image& brushedMetal()
+{
+    static const auto cap = []
+    {
+        constexpr int size = 160;
+        constexpr float radius = size * 0.5f - 1.0f;
+        juce::Image image(juce::Image::ARGB, size, size, true);
+        juce::Random random(412);
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+            {
+                const float dx = x + 0.5f - size * 0.5f;
+                const float dy = y + 0.5f - size * 0.5f;
+                const float distance = std::hypot(dx, dy);
+                const float coverage = juce::jlimit(0.0f, 1.0f, radius + 0.5f - distance);
+                if (coverage == 0.0f) continue;
+
+                const float angle = std::atan2(dy, dx);
+                const float light = std::cos(2.0f * (angle + 0.40f));
+                const float rings = std::cos(distance * juce::MathConstants<float>::twoPi / 3.6f);
+                const float contrast = juce::jmin(1.0f, distance / 5.0f);
+                const float edge = juce::jlimit(0.0f, 1.0f, (distance - radius + 8.0f) / 8.0f);
+                const auto grey = static_cast<juce::uint8>(juce::jlimit(0, 255, juce::roundToInt(
+                    189.0f + contrast * (39.0f * light + (13.0f + 5.0f * light) * rings)
+                    - 24.0f * edge + 7.0f * random.nextFloat())));
+                image.setPixelAt(x, y, Colour(grey, grey, grey, coverage));
+            }
+        return image;
+    }();
+    return cap;
+}
+
+void drawEnamelPlate(Graphics& g, Rectangle<float> bounds, Colour colour)
+{
+    if (bounds.isEmpty() || !g.clipRegionIntersects(bounds.getSmallestIntegerContainer())) return;
+
+    constexpr float radius = 3.0f;
+    g.setGradientFill(panelLightGradient(bounds, colour.brighter(0.10f), colour.darker(0.11f)));
+    g.fillRoundedRectangle(bounds, radius);
+    g.setTiledImageFill(enamelGrain(), 0, 0, 1.0f);
+    g.fillRoundedRectangle(bounds, radius);
+    setRimLighting(g, bounds, colour.brighter(0.30f), colour, colour.darker(0.46f));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
+}
+
 void display(Graphics& g, Rectangle<int> bounds, const PanelPalette& palette)
 {
     const auto& colours = palette.display;
@@ -166,7 +243,10 @@ void display(Graphics& g, Rectangle<int> bounds, const PanelPalette& palette)
     const auto lip = glass.expanded(0.85f);
     g.setGradientFill(panelLightGradient(lip, juce::Colours::black.withAlpha(0.72f), juce::Colours::transparentBlack));
     g.drawRoundedRectangle(lip, 3.85f, 1.0f);
-    g.setColour(colours.glass);
+    if (colours.shaded)
+        g.setGradientFill(panelLightGradient(glass, colours.glass.brighter(0.47f), colours.glass.darker(0.28f)));
+    else
+        g.setColour(colours.glass);
     g.fillRoundedRectangle(glass, 3.0f);
     g.setColour(colours.scanline);
     for (int y = inner.getY() + 3; y < inner.getBottom() - 2; y += 3)
@@ -260,7 +340,7 @@ public:
         const auto& c = palette();
         using UI = ColourScheme::UIColour;
         auto scheme = getDarkColourScheme();
-        if (isDark())
+        if (hasThemedMenus())
         {
             scheme.setUIColour(UI::menuBackground, c.header.shell);
             scheme.setUIColour(UI::menuText, c.header.ink);
@@ -271,14 +351,17 @@ public:
     }
 
     PanelTheme getTheme() const { return theme; }
-    bool isDark() const { return theme != PanelTheme::classic; }
+    bool hasThemedMenus() const { return theme != PanelTheme::classic; }
+    bool hasWoodCheeks() const { return theme == PanelTheme::classicDark || isMidnight(); }
     bool isMidnight() const { return theme == PanelTheme::midnight; }
+    bool isEnamel() const { return theme == PanelTheme::enamel; }
     const PanelPalette& palette() const
     {
         switch (theme)
         {
             case PanelTheme::classicDark: return classicDarkPalette;
             case PanelTheme::midnight: return midnightPalette;
+            case PanelTheme::enamel: return enamelPalette;
             case PanelTheme::classic: return classicPalette;
         }
         return classicPalette;
@@ -301,6 +384,12 @@ public:
         {
             return centre.getPointOnCircumference(distance, angle);
         };
+
+        if (isEnamel())
+        {
+            drawEnamelKnob(g, bounds, start, end, position, slider);
+            return;
+        }
 
         for (int i = 0; i <= 10; ++i)
         {
@@ -356,19 +445,19 @@ public:
                           juce::Slider::SliderStyle, juce::Slider& slider) override
     {
         const auto& c = palette();
-        const float capRadius = isMidnight() ? 1.5f : 3.5f;
+        const float capRadius = isEnamel() || isMidnight() ? 1.5f : 3.5f;
         const float cx = x + w * 0.5f;
         const Rectangle<float> track(cx - 3.0f, static_cast<float>(y), 6.0f, static_cast<float>(h));
         for (int tick = 0; tick <= 8; ++tick)
         {
             const float ypos = y + static_cast<float>(h * tick) / 8.0f;
-            g.setColour(tick == 4 ? c.legend.quiet : c.enclosure.edge);
+            g.setColour(isEnamel() ? c.legend.ink : tick == 4 ? c.legend.quiet : c.enclosure.edge);
             g.drawLine(cx - 11.0f, ypos, cx - 7.0f, ypos, 1.0f);
             g.drawLine(cx + 7.0f, ypos, cx + 11.0f, ypos, 1.0f);
         }
         g.setColour(c.control.track);
         g.fillRoundedRectangle(track, 3.0f);
-        if (isMidnight())
+        if (isEnamel() || isMidnight())
         {
             g.setColour(c.enclosure.edge);
             g.drawRoundedRectangle(track.expanded(0.55f), 3.5f, 0.8f);
@@ -380,6 +469,20 @@ public:
             g.fillRect(cx - 1.0f, std::min(reference, position), 2.0f, std::abs(reference - position));
         }
         const auto cap = Rectangle<float>(static_cast<float>(std::min(w - 4, 25)), 15.0f).withCentre({ cx, position });
+        if (isEnamel())
+        {
+            drawControlShadow(g, cap, capRadius, Colour(0x82000000));
+            g.setColour(c.control.base);
+            g.fillRoundedRectangle(cap, capRadius);
+            const auto top = cap.reduced(2.0f, 2.2f);
+            g.setGradientFill(panelLightGradient(top, c.enclosure.rim, c.control.shade));
+            g.fillRoundedRectangle(top, 1.0f);
+            g.setColour(c.control.pointer);
+            g.drawLine(top.getX() + 2.0f, position, top.getRight() - 2.0f, position, 1.4f);
+            if (slider.hasKeyboardFocus(true)) drawEnamelFocus(g, cap.expanded(1.5f), capRadius);
+            return;
+        }
+
         drawControlShadow(g, cap, capRadius, Colour(0x490c120f));
         const auto face = c.control.face;
         const auto shade = isMidnight() ? c.control.shade : face.darker(0.12f);
@@ -415,6 +518,12 @@ public:
                 g.setColour(phosphor.withAlpha(down ? 1.0f : focused ? 0.85f : 0.5f));
                 g.drawRoundedRectangle(area, 4.0f, 1.0f);
             }
+            return;
+        }
+
+        if (isEnamel())
+        {
+            drawEnamelButton(g, button, colour, area, highlighted, down);
             return;
         }
 
@@ -456,14 +565,101 @@ public:
     void drawButtonText(Graphics& g, juce::TextButton& button, bool, bool down) override
     {
         const bool enabled = button.isEnabled();
-        const auto text = button.findColour(enabled && button.getToggleState() ? juce::TextButton::textColourOnId
-                                                                                : juce::TextButton::textColourOffId);
-        label(g, button.getButtonText(), button.getLocalBounds().reduced(4, 2).translated(0, enabled && down ? 1 : -1),
+        const bool active = enabled && button.getToggleState();
+        const auto text = button.findColour(active ? juce::TextButton::textColourOnId : juce::TextButton::textColourOffId);
+        auto area = button.getLocalBounds().reduced(4, 2).translated(0, enabled && down ? 1 : -1);
+        if (isEnamel() && active && button.getWidth() >= 44) area = area.withTrimmedLeft(6);
+        label(g, button.getButtonText(), area,
               button.getHeight() > 32 ? 14.0f : 12.0f, text.withMultipliedAlpha(enabled ? 1.0f : 0.40f),
               juce::Justification::centred, true);
     }
 
 private:
+    static void drawEnamelFocus(Graphics& g, Rectangle<float> bounds, float radius)
+    {
+        g.setColour(enamelPalette.control.base);
+        g.drawRoundedRectangle(bounds, radius, 2.4f);
+        g.setColour(enamelPalette.enclosure.rim);
+        g.drawRoundedRectangle(bounds, radius, 1.0f);
+    }
+
+    static void drawEnamelKnob(Graphics& g, Rectangle<float> bounds, float start, float end,
+                                float position, const juce::Slider& slider)
+    {
+        const auto& c = enamelPalette;
+        const auto centre = bounds.getCentre();
+        const auto radius = bounds.getWidth() * 0.5f;
+        const bool enabled = slider.isEnabled();
+        const auto point = [&](float angle, float distance) { return centre.getPointOnCircumference(distance, angle); };
+        for (int i = 0; i <= 10; ++i)
+        {
+            const auto angle = start + (end - start) * i / 10.0f;
+            const bool major = i % 5 == 0;
+            g.setColour(c.legend.ink.withAlpha(enabled ? 0.95f : 0.35f));
+            g.drawLine({ point(angle, radius + 1.9f), point(angle, radius + (major ? 6.2f : 5.0f)) },
+                       major ? 1.5f : 1.0f);
+        }
+
+        drawControlShadow(g, bounds, radius, Colour(0x96000000));
+        g.setColour(c.control.base.darker(0.65f));
+        g.fillEllipse(bounds.translated(0.0f, 1.25f));
+        g.setGradientFill(panelLightGradient(bounds, c.control.rim, c.control.base.darker(0.7f)));
+        g.fillEllipse(bounds);
+        g.setColour(c.control.base);
+        g.drawEllipse(bounds.reduced(0.5f), 1.0f);
+
+        const auto cap = bounds.reduced(radius * 0.23f);
+        if (slider.isColourSpecified(juce::Slider::thumbColourId))
+        {
+            g.setColour(slider.findColour(juce::Slider::thumbColourId).withAlpha(0.83f));
+            g.drawEllipse(cap.expanded(0.7f), 0.9f);
+        }
+        g.setOpacity(enabled ? 1.0f : 0.55f);
+        g.drawImage(brushedMetal(), cap);
+
+        const auto angle = start + position * (end - start);
+        const auto indexStart = point(angle, radius * 0.28f);
+        const auto indexEnd = point(angle, radius * 0.68f);
+        g.setColour(c.control.pointer.withAlpha(enabled ? 1.0f : 0.55f));
+        g.drawLine({ indexStart, indexEnd }, juce::jlimit(1.25f, 3.0f, radius * 0.12f));
+
+        if (enabled && slider.hasKeyboardFocus(true))
+            drawEnamelFocus(g, bounds, radius);
+        else if (enabled && slider.isMouseOverOrDragging())
+        {
+            g.setColour(c.enclosure.rim.withAlpha(0.60f));
+            g.drawEllipse(bounds.reduced(0.8f), 0.8f);
+        }
+    }
+
+    static void drawEnamelButton(Graphics& g, const juce::Button& button, Colour colour, Rectangle<float> area,
+                                  bool highlighted, bool down)
+    {
+        const auto& c = enamelPalette;
+        const bool enabled = button.isEnabled();
+        const bool pressed = enabled && down;
+        const bool active = enabled && button.getToggleState();
+        constexpr float radius = 2.0f;
+        drawControlShadow(g, area, radius, Colour(0xff101413).withAlpha(pressed ? 0.34f : 0.60f));
+        g.setGradientFill(panelLightGradient(area, c.control.rim, c.control.base.darker(0.50f)));
+        g.fillRoundedRectangle(area, radius);
+        auto cap = area.reduced(2.2f, 2.0f).withTrimmedBottom(1.0f).translated(0.0f, pressed ? 1.0f : 0.0f);
+        const auto tone = !enabled ? button.findColour(juce::TextButton::buttonColourId).interpolatedWith(c.control.shade, 0.55f)
+                        : pressed ? colour.darker(0.20f) : highlighted ? colour.brighter(0.16f) : colour;
+        g.setGradientFill(panelLightGradient(cap, tone.brighter(0.14f), tone.darker(0.12f)));
+        g.fillRoundedRectangle(cap, 1.0f);
+        if (active)
+        {
+            auto indicator = button.getWidth() >= 44 ? cap.removeFromLeft(5.0f).reduced(0.5f, 0.75f)
+                                                     : cap.removeFromBottom(2.0f).reduced(1.0f, 0.0f);
+            g.setColour(c.header.meter);
+            g.fillRoundedRectangle(indicator, 0.6f);
+        }
+
+        if (enabled && button.hasKeyboardFocus(true))
+            drawEnamelFocus(g, area, radius);
+    }
+
     PanelTheme theme = PanelTheme::classic;
 };
 
@@ -758,7 +954,7 @@ private:
         g.fillRoundedRectangle(area, 3.0f);
         const auto face = area.withTrimmedBottom(black ? 4.0f : 3.0f);
         const auto keyColour = down ? c.display.phosphor : black ? c.keys.black : c.keys.white;
-        if (skin.isMidnight())
+        if (skin.isEnamel() || skin.isMidnight())
             g.setGradientFill(panelLightGradient(face, keyColour.brighter(black ? 0.28f : 0.12f),
                                                  keyColour.darker(black ? 0.23f : 0.07f)));
         else
@@ -815,7 +1011,7 @@ public:
     bool playComputerKey(const juce::KeyPress& press) { return keys.playComputerKey(press); }
     bool releaseComputerKeys() { return keys.releaseComputerKeys(); }
     void releasePerformanceKeys() { keys.release(); }
-    bool hasWoodCheeks() const { return skin.isDark(); }
+    bool hasWoodCheeks() const { return skin.hasWoodCheeks(); }
     bool hasTopRail() const { return skin.isMidnight(); }
 
     Rectangle<int> faceplateBounds() const
@@ -829,6 +1025,14 @@ public:
         const auto& c = skin.palette();
         auto face = bounds;
         g.fillAll(c.enclosure.body);
+        if (skin.isEnamel())
+        {
+            const auto metal = face.reduced(4.0f, 3.0f);
+            drawEnamelPlate(g, metal.withBottom(104.0f), c.header.shell);
+            drawEnamelPlate(g, metal.withTop(660.0f), c.enclosure.plate);
+            return;
+        }
+
         if (hasWoodCheeks())
         {
             drawWoodCheek(g, face.removeFromLeft(woodCheekWidth), false);
@@ -871,7 +1075,10 @@ public:
     void paint(Graphics& g) override
     {
         const auto& c = skin.palette();
-        paintSectionDividers(g);
+        if (skin.isEnamel())
+            paintEnamelSections(g);
+        else
+            paintSectionDividers(g);
         paintHeader(g);
         paintOscillators(g);
         paintSectionHeading(g, filterPanel, "FILTER");
@@ -974,11 +1181,13 @@ private:
                             : style == ButtonStyle::panic ? c.button.panic
                             : style == ButtonStyle::header ? c.button.header : c.button.panel;
             control->setColour(juce::TextButton::buttonColourId, face);
+            const auto onFace = skin.isEnamel() ? c.button.active : c.display.phosphor;
             control->setColour(juce::TextButton::buttonOnColourId,
-                               style == ButtonStyle::display ? face : c.display.phosphor);
+                               style == ButtonStyle::display ? face : onFace);
             control->setColour(juce::TextButton::textColourOffId,
                                style == ButtonStyle::panel ? c.legend.ink : c.header.ink);
-            control->setColour(juce::TextButton::textColourOnId, c.display.glass);
+            control->setColour(juce::TextButton::textColourOnId,
+                               skin.isEnamel() ? c.button.activeText : c.display.glass);
         }
         for (auto& row : oscillatorKnobs)
             row[volumeColumn]->setColour(juce::Slider::thumbColourId, c.control.warm);
@@ -1509,7 +1718,7 @@ private:
         syncControls();
         const auto current = audio.patch().sound.osc[row].table;
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.hasThemedMenus()) menu.setLookAndFeel(&skin);
         menu.addSectionHeader("Classic analog");
         for (int table = sineTable; table < tableCount; ++table)
             menu.addItem(table + 1, tableNames[table], true, table == current);
@@ -1543,7 +1752,7 @@ private:
     {
         keys.release();
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.hasThemedMenus()) menu.setLookAndFeel(&skin);
         for (int i = 0; i < presetCount; ++i)
             menu.addItem(i + 1, String(i + 1).paddedLeft('0', 2) + "   " + String(factoryPresets()[i].name),
                          true, i == presetSlot && !edited);
@@ -1602,7 +1811,7 @@ private:
         keys.release();
         auto outputs = audio.outputs();
         juce::PopupMenu menu;
-        if (skin.isDark()) menu.setLookAndFeel(&skin);
+        if (skin.hasThemedMenus()) menu.setLookAndFeel(&skin);
         menu.addSectionHeader("Audio output");
         if (outputs.empty()) menu.addItem(-1, "No devices available", false);
         String lastType;
@@ -1660,6 +1869,17 @@ private:
             g.drawHorizontalLine(660, panelInset, panelRight);
     }
 
+    void paintEnamelSections(Graphics& g) const
+    {
+        const Colour olive(0xff919e55), blue(0xff7bb5c1), ochre(0xffdeb35e);
+        const Colour grey(0xffc6c5be), redOrange(0xffda805d);
+        for (const auto& [area, tone] : { std::pair { oscPanel, olive }, std::pair { filterPanel, blue },
+                                        std::pair { envPanel, ochre }, std::pair { lfoPanel, blue },
+                                        std::pair { matrixPanel, grey }, std::pair { voicingPanel, grey },
+                                        std::pair { effectsPanel, redOrange }, std::pair { arpPanel, ochre } })
+            drawEnamelPlate(g, area.toFloat().expanded(2.0f), tone);
+    }
+
     void paintSectionHeading(Graphics& g, Rectangle<int> area, const String& heading) const
     {
         label(g, heading, { area.getX() + 13, area.getY() + 10, area.getWidth() - 26, 20 }, 17.0f,
@@ -1685,8 +1905,15 @@ private:
     {
         const auto& c = skin.palette();
         const auto phosphor = c.display.phosphor;
-        const bool hardware = skin.isMidnight();
-        if (hardware)
+        const bool enamel = skin.isEnamel();
+        const bool meterDisplay = enamel || skin.isMidnight();
+        if (enamel)
+        {
+            g.setColour(c.display.bezel);
+            g.fillRoundedRectangle({ 41, 39, 41, 39 }, 3.0f);
+            g.setColour(phosphor);
+        }
+        else if (skin.isMidnight())
         {
             g.setColour(c.legend.cool);
             g.drawRect(41, 39, 41, 39, 1);
@@ -1706,14 +1933,20 @@ private:
         label(g, "WAVETABLE SYNTHESIZER", { 97, 66, 142, 16 }, 12.5f, c.header.quiet,
               juce::Justification::centredLeft, true);
 
+        if (enamel)
+        {
+            g.setColour(c.header.edge);
+            g.drawRoundedRectangle({ 440.0f, 29.0f, 382.0f, 60.0f }, 3.0f, 1.3f);
+        }
         display(g, patchDisplay, c);
         const auto id = presetSlot < 0 ? String("USER") : String(presetSlot + 1).paddedLeft('0', 2) + "  FACTORY";
         pixels(g, id + (edited ? "  / EDIT" : ""), 505, 43, 1, phosphor.withAlpha(0.68f));
         pixels(g, String::fromUTF8(audio.patch().name.c_str()).substring(0, 21), 505, 58, 2, phosphor);
         if (!keys.isVisible() && juce::Time::getMillisecondCounterHiRes() < messageEnd)
-            label(g, message, headerNotice, 12.5f, messageIsError ? c.header.clip : c.header.ink);
+            label(g, message, headerNotice, 12.5f,
+                  messageIsError ? (enamel ? c.legend.warm : c.header.clip) : c.header.ink);
 
-        if (hardware)
+        if (meterDisplay)
         {
             display(g, { 1092, 35, 164, 48 }, c);
             pixels(g, "OUT", 1102, 44, 1, phosphor.withAlpha(0.75f));
@@ -1725,12 +1958,12 @@ private:
         for (int i = 0; i < 13; ++i)
         {
             const bool lit = db > -54.0f + 4.5f * i;
-            const auto colour = hardware ? phosphor.withAlpha(lit ? (i >= 11 ? 1.0f : 0.8f) : 0.15f)
-                                         : lit ? (i >= 11 ? c.header.clip : c.header.meter) : c.header.unlit;
+            const auto colour = skin.isMidnight() ? phosphor.withAlpha(lit ? (i >= 11 ? 1.0f : 0.8f) : 0.15f)
+                                                  : lit ? (i >= 11 ? c.header.clip : c.header.meter) : c.header.unlit;
             g.setColour(colour);
-            const int x = 1102 + (hardware ? 11 : 12) * i;
-            const Rectangle<float> led { static_cast<float>(x), 61.0f, hardware ? 8.5f : 9.0f, 9.0f };
-            g.fillRoundedRectangle(led, hardware ? 0.75f : 1.5f);
+            const int x = 1102 + (meterDisplay ? 11 : 12) * i;
+            const Rectangle<float> led { static_cast<float>(x), 61.0f, meterDisplay ? 8.5f : 9.0f, 9.0f };
+            g.fillRoundedRectangle(led, meterDisplay ? 0.75f : 1.5f);
         }
     }
 
@@ -1748,7 +1981,7 @@ private:
         for (int row = 0; row < oscillatorCount; ++row)
         {
             const auto area = oscillatorDisplay(row);
-            g.setColour(skin.isMidnight() ? c.enclosure.edge : c.legend.quiet.withAlpha(0.65f));
+            g.setColour(skin.isMidnight() ? c.enclosure.edge : c.legend.quiet.withAlpha(skin.isEnamel() ? 0.35f : 0.65f));
             g.drawHorizontalLine(oscillatorKnob(row, positionColumn).getCentreY(), static_cast<float>(area.getRight()),
                                  static_cast<float>(oscillatorColumnX(volumeColumn)));
             paintWavetable(g, row, area);
@@ -1837,8 +2070,8 @@ private:
     void paintPerformance(Graphics& g) const
     {
         const auto& c = skin.palette();
-        const bool hardware = skin.isMidnight();
-        if (hardware)
+        const bool statusDisplay = skin.isEnamel() || skin.isMidnight();
+        if (statusDisplay)
         {
             display(g, { 120, 709, 259, 52 }, c);
             const auto keyBed = keys.getBounds().toFloat().expanded(5.0f, 4.0f);
@@ -1852,15 +2085,15 @@ private:
         g.drawVerticalLine(385, 686.0f, 758.0f);
         label(g, "PERFORMANCE", { 128, 687, 244, 20 }, 13.0f, c.legend.ink, juce::Justification::centredLeft, true);
         const auto info = "MIDI " + String(audio.inputCount()) + " IN  /  " + String(audio.voiceCount()).paddedLeft('0', 2) + " VOICES";
-        pixels(g, info, 128, 718, 1, hardware ? c.display.phosphor : c.legend.cool.darker(0.2f));
-        g.setColour(hardware ? c.display.phosphor.withAlpha(audio.hasRecentMidiNote() ? 1.0f : 0.22f)
-                             : audio.hasRecentMidiNote() ? c.legend.warm : c.legend.quiet.withAlpha(0.25f));
+        pixels(g, info, 128, 718, 1, statusDisplay ? c.display.phosphor : c.legend.cool.darker(0.2f));
+        g.setColour(statusDisplay ? c.display.phosphor.withAlpha(audio.hasRecentMidiNote() ? 1.0f : 0.22f)
+                                  : audio.hasRecentMidiNote() ? c.legend.warm : c.legend.quiet.withAlpha(0.25f));
         g.fillEllipse(134.0f + 6.0f * info.length(), 719.0f, 5.0f, 5.0f);
         const bool showNotice = juce::Time::getMillisecondCounterHiRes() < messageEnd;
         const auto status = showNotice ? message : audio.unavailableInputs() > 0
             ? String(audio.unavailableInputs()) + " MIDI input(s) unavailable" : audio.audioStatus();
-        const auto statusInk = hardware ? c.display.phosphor.withAlpha(showNotice && messageIsError ? 1.0f : 0.76f)
-                                       : showNotice && messageIsError ? c.legend.warm : c.legend.quiet;
+        const auto statusInk = statusDisplay ? c.display.phosphor.withAlpha(showNotice && messageIsError ? 1.0f : 0.76f)
+                                            : showNotice && messageIsError ? c.legend.warm : c.legend.quiet;
         label(g, status, { 128, 736, 247, 19 }, 12.5f, statusInk);
         label(g, "KEY OCT " + String(octave), { 399, 689, 89, 25 }, 12.0f, c.legend.ink,
               juce::Justification::centred, true);
