@@ -1027,9 +1027,7 @@ public:
         g.fillAll(c.enclosure.body);
         if (skin.isEnamel())
         {
-            const auto metal = face.reduced(4.0f, 3.0f);
-            drawEnamelPlate(g, metal.withBottom(104.0f), c.header.shell);
-            drawEnamelPlate(g, metal.withTop(660.0f), c.enclosure.plate);
+            paintEnamelChassis(g, face);
             return;
         }
 
@@ -1075,9 +1073,7 @@ public:
     void paint(Graphics& g) override
     {
         const auto& c = skin.palette();
-        if (skin.isEnamel())
-            paintEnamelSections(g);
-        else
+        if (!skin.isEnamel())
             paintSectionDividers(g);
         paintHeader(g);
         paintOscillators(g);
@@ -1869,15 +1865,31 @@ private:
             g.drawHorizontalLine(660, panelInset, panelRight);
     }
 
-    void paintEnamelSections(Graphics& g) const
+    void paintEnamelChassis(Graphics& g, Rectangle<float> viewport) const
     {
+        constexpr float outset = 2.0f;
+        constexpr float gap = 6.0f;
+        const auto edge = viewport.expanded(4.0f, 0.0f);
+        const auto& c = skin.palette();
+        const float upperTop = oscPanel.getY() - outset;
+        const float lowerTop = oscPanel.getBottom() + outset + gap;
+        const float lowerBottom = voicingPanel.getBottom() + outset;
+        drawEnamelPlate(g, edge.withBottom(upperTop - gap), c.header.shell);
+        drawEnamelPlate(g, edge.withTop(lowerBottom + gap), c.enclosure.plate);
+
         const Colour olive(0xff919e55), blue(0xff7bb5c1), ochre(0xffdeb35e);
         const Colour grey(0xffc6c5be), redOrange(0xffda805d);
         for (const auto& [area, tone] : { std::pair { oscPanel, olive }, std::pair { filterPanel, blue },
                                         std::pair { envPanel, ochre }, std::pair { lfoPanel, blue },
                                         std::pair { matrixPanel, grey }, std::pair { voicingPanel, grey },
                                         std::pair { effectsPanel, redOrange }, std::pair { arpPanel, ochre } })
-            drawEnamelPlate(g, area.toFloat().expanded(2.0f), tone);
+        {
+            auto plate = area.toFloat().expanded(outset);
+            if (area.getY() == lowerPanelY) plate = plate.withTop(lowerTop);
+            if (area.getX() == panelInset) plate = plate.withLeft(edge.getX());
+            if (area.getRight() == panelRight) plate = plate.withRight(edge.getRight());
+            drawEnamelPlate(g, plate, tone);
+        }
     }
 
     void paintSectionHeading(Graphics& g, Rectangle<int> area, const String& heading) const
